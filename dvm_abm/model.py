@@ -24,7 +24,7 @@ class DVMConstructionModel(Model):
     def __init__(self, scenario: Scenario|None=None, seed:int=20260609, max_days:int=100, number_of_tasks:int=72, daily_shock_probability:float=.32):
         try: super().__init__(rng=seed)
         except TypeError: super().__init__(seed=seed)
-        self.scenario=scenario or get_default_scenarios()[0]; self.seed=seed; self.max_days=max_days; self.day=0; self.running=True; self.py_random=random.Random(seed)
+        object.__setattr__(self, "scenario", scenario or get_default_scenarios()[0]); self.seed=seed; self.max_days=max_days; self.day=0; self.running=True; self.py_random=random.Random(seed)
         self.trust_in_data=self.scenario.initial_trust_in_data; self.trust_in_management=self.scenario.initial_trust_in_management; self.planning_quality=self.scenario.initial_planning_quality; self.data_quality_modifier=1.0
         self.useful_dvm_events=0; self.harmful_events=0; self.external_disruptions=0; self.external_disruptions_by_type={}; self.recovery_times=[]; self.blockage_resolution_times=[]
         self.total_recovery_time=0.0; self.alternative_task_switches=0; self.failed_task_switches=0; self.supervisor_recovery_interventions=0; self.idle_time_due_to_external_disruptions=0.0

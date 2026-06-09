@@ -37,7 +37,7 @@ class DVMConstructionModel(Model):
         r=self.py_random
         for i in range(n):
             pred=[r.randrange(max(1,i-10),i)] if i>6 and r.random()<.6 else []
-            t=TaskAgent(self,i,r.choice(self.trades),r.randrange(12),r.randrange(42),r.randint(1,5),r.uniform(1,5),r.uniform(.2,1),r.uniform(.35,1),pred); self.tasks.append(t)
+            t=TaskAgent(self,i,r.choice(self.trades),r.randrange(12),r.randrange(42),r.randint(1,5),r.uniform(.2,1),r.uniform(.35,1),pred); self.tasks.append(t)
         for i,tr in enumerate(["drywall","mep","finishes","carpentry","drywall","mep"]):
             ad=clamp(.35+.48*self.dvm_scenario.crew_access-.18*self.dvm_scenario.reporting_burden+r.normalvariate(0,.08)); comp=clamp(self.dvm_scenario.compliance_pressure*(.45+.45*self.dvm_scenario.management_access))
             self.crews.append(CrewAgent(self,1000+i,tr,[0,2,4,6,8,10][i],clamp(r.normalvariate(.6,.15)),clamp(r.normalvariate(.5+.25*self.dvm_scenario.crew_access,.15)),clamp_range(r.normalvariate(1,.1),.75,1.25),ad,comp))

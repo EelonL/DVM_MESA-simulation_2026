@@ -34,7 +34,7 @@ class CrewAgent(MesaCompatAgent):
         self.questions_asked=0; self.alternative_task_switches=0; self.failed_task_switches=0
     def effective_use(self): return clamp(max(self.adoption, self.compliance_use))
     def update_adoption(self, useful_event=False, bad_event=False):
-        s=self.model.scenario; delta=s.learning_rate*self.dvm_skill
+        s=self.model.dvm_scenario; delta=s.learning_rate*self.dvm_skill
         if useful_event: delta += s.adoption_sensitivity*(1-.55*s.reporting_burden)
         if bad_event: delta -= s.adoption_sensitivity*(.45*s.reporting_burden+.55*s.perceived_surveillance)
         self.adoption=clamp(self.adoption+delta)
@@ -48,7 +48,7 @@ class SupervisorAgent(MesaCompatAgent):
         self.backlog=0.0; self.cumulative_reactive_time=0.0; self.cumulative_planning_time=0.0; self.cumulative_questions=0; self.cumulative_unresolved_questions=0.0
         self.last_reactive_time=0.0; self.last_planning_time=0.0; self.last_reporting_time=0.0; self.last_utilization=0.0; self.last_response_delay=0.0; self.last_firefighting_ratio=0.0
     def process_day(self, questions, escalations, coordination_needs, recovery_interventions, external_pressure):
-        s=self.model.scenario; m=self.model
+        s=self.model.dvm_scenario; m=self.model
         reactive=questions*self.question_handling_time + escalations*self.escalation_handling_time + coordination_needs*self.coordination_task_time + recovery_interventions*self.recovery_intervention_time + s.reporting_burden*self.reporting_time_base
         total=reactive+min(self.backlog,self.capacity_per_day*.5)
         planning=max(0.0,self.capacity_per_day-total); overload=max(0.0,total-self.capacity_per_day)

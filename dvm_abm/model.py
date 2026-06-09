@@ -53,9 +53,9 @@ class DVMConstructionModel(Model):
             "sa_std": lambda m: pstdev([c.last_sa for c in m.crews]) if len(m.crews) > 1 else 0.0,
             "avg_decision_delay_proxy": lambda m: safe_mean([
                 clamp_range(
-                    3.0*m.scenario.decision_centralization*(1.0-c.last_sa)
-                    + 1.2*m.scenario.reporting_burden*(1.0-m.trust_in_management)
-                    + m.scenario.overload_delay_effect*m.supervisor.backlog,
+                    3.0*m.dvm_scenario.decision_centralization*(1.0-c.last_sa)
+                    + 1.2*m.dvm_scenario.reporting_burden*(1.0-m.trust_in_management)
+                    + m.dvm_scenario.overload_delay_effect*m.supervisor.backlog,
                     0.05, 6.5
                 ) for c in m.crews
             ]),

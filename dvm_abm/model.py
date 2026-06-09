@@ -44,7 +44,7 @@ class DVMConstructionModel(Model):
         self.supervisor=SupervisorAgent(self,9000,self.dvm_scenario.supervisor_capacity,self.dvm_scenario.question_handling_time,self.dvm_scenario.escalation_handling_time,self.dvm_scenario.reporting_time_base,self.dvm_scenario.coordination_task_time)
     def _reporters(self):
         return {
-            "scenario": lambda m: m.scenario.name,
+            "scenario": lambda m: m.dvm_scenario.name,
             "day": "day",
             "completed_tasks": lambda m: sum(t.is_done for t in m.tasks),
             "total_tasks": lambda m: len(m.tasks),

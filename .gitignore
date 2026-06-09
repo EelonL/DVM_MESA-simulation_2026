@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+outputs/csv/*.csv
+outputs/figures/*.png
+outputs/figures/*.svg
+
+.DS_Store
+.streamlit/secrets.toml

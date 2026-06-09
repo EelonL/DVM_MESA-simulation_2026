@@ -1,5 +1,6 @@
 streamlit
 mesa
+networkx
 pandas
 numpy
 matplotlib

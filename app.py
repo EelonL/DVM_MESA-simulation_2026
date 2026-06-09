@@ -119,11 +119,17 @@ def scenario_label(name: str) -> str:
     return SCENARIO_LABELS.get(name, name)
 
 
-def rgba_from_hex(hex_color: str, alpha_hex: str = "26") -> str:
-    """Return a transparent hex-like colour for Plotly fillcolor."""
-    if hex_color.startswith("#") and len(hex_color) == 7:
-        return hex_color + alpha_hex
-    return "rgba(55,138,221,0.15)"
+def rgba_from_hex(hex_color: str, alpha: float = 0.15) -> str:
+    """Return a Plotly-compatible rgba colour from a #RRGGBB colour."""
+    try:
+        if isinstance(hex_color, str) and hex_color.startswith("#") and len(hex_color) == 7:
+            r = int(hex_color[1:3], 16)
+            g = int(hex_color[3:5], 16)
+            b = int(hex_color[5:7], 16)
+            return f"rgba({r},{g},{b},{alpha})"
+    except Exception:
+        pass
+    return f"rgba(55,138,221,{alpha})"
 
 
 def build_single_excel(

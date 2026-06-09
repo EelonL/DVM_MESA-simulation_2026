@@ -115,6 +115,7 @@ def scenario_color(name: str) -> str:
 
 
 def scenario_label(name: str) -> str:
+    name = str(name)
     return SCENARIO_LABELS.get(name, name)
 
 
@@ -313,14 +314,34 @@ with st.sidebar:
     st.divider()
 
     st.markdown("**Scenario**")
+
+    # Build a robust scenario lookup. This avoids StopIteration if Streamlit
+    # has stale widget state after a code/config update.
+    scenario_names = [s.name for s in SCENARIOS]
+    scenario_by_name = {s.name: s for s in SCENARIOS}
+
+    if not scenario_names:
+        st.error(
+            "No scenarios were loaded. Check that config/scenarios.yaml exists "
+            "and contains a top-level 'scenarios:' section."
+        )
+        st.stop()
+
+    previous_selection = st.session_state.get("selected_scenario_name", scenario_names[0])
+    if previous_selection not in scenario_by_name:
+        previous_selection = scenario_names[0]
+        st.session_state["selected_scenario_name"] = previous_selection
+
     selected_scenario_name = st.selectbox(
         "Choose scenario",
-        options=[s.name for s in SCENARIOS],
+        options=scenario_names,
+        index=scenario_names.index(previous_selection),
         format_func=scenario_label,
         label_visibility="collapsed",
+        key="selected_scenario_name",
     )
 
-    active_scenario = next(s for s in SCENARIOS if s.name == selected_scenario_name)
+    active_scenario = scenario_by_name.get(selected_scenario_name, SCENARIOS[0])
 
     st.divider()
 

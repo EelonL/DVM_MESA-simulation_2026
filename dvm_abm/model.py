@@ -22,8 +22,8 @@ class AgentSA:
 
 class DVMConstructionModel(Model):
     def __init__(self, scenario: Scenario|None=None, seed:int=20260609, max_days:int=100, number_of_tasks:int=72, daily_shock_probability:float=.32):
-        try: super().__init__(rng=seed)
-        except TypeError: super().__init__(seed=seed)
+        try: super().__init__(seed=seed)
+        except TypeError: super().__init__()
         object.__setattr__(self, "scenario", scenario or get_default_scenarios()[0]); self.seed=seed; self.max_days=max_days; self.day=0; self.running=True; self.py_random=random.Random(seed)
         self.trust_in_data=self.scenario.initial_trust_in_data; self.trust_in_management=self.scenario.initial_trust_in_management; self.planning_quality=self.scenario.initial_planning_quality; self.data_quality_modifier=1.0
         self.useful_dvm_events=0; self.harmful_events=0; self.external_disruptions=0; self.external_disruptions_by_type={}; self.recovery_times=[]; self.blockage_resolution_times=[]
@@ -37,13 +37,77 @@ class DVMConstructionModel(Model):
         r=self.py_random
         for i in range(n):
             pred=[r.randrange(max(1,i-10),i)] if i>6 and r.random()<.6 else []
-            t=TaskAgent(self,i,r.choice(self.trades),r.randrange(12),r.randrange(42),r.randint(1,5),r.uniform(.2,1),r.uniform(.35,1),pred); self.tasks.append(t)
+            t=TaskAgent(self,i,r.choice(self.trades),r.randrange(12),r.randrange(42),r.randint(1,5),r.uniform(1,5),r.uniform(.2,1),r.uniform(.35,1),pred); self.tasks.append(t)
         for i,tr in enumerate(["drywall","mep","finishes","carpentry","drywall","mep"]):
             ad=clamp(.35+.48*self.scenario.crew_access-.18*self.scenario.reporting_burden+r.normalvariate(0,.08)); comp=clamp(self.scenario.compliance_pressure*(.45+.45*self.scenario.management_access))
             self.crews.append(CrewAgent(self,1000+i,tr,[0,2,4,6,8,10][i],clamp(r.normalvariate(.6,.15)),clamp(r.normalvariate(.5+.25*self.scenario.crew_access,.15)),clamp_range(r.normalvariate(1,.1),.75,1.25),ad,comp))
         self.supervisor=SupervisorAgent(self,9000,self.scenario.supervisor_capacity,self.scenario.question_handling_time,self.scenario.escalation_handling_time,self.scenario.reporting_time_base,self.scenario.coordination_task_time)
     def _reporters(self):
-        return {"scenario":lambda m:m.scenario.name,"day":"day","completed_tasks":lambda m:sum(t.is_done for t in m.tasks),"total_tasks":lambda m:len(m.tasks),"ppc_proxy":lambda m:m.ppc_proxy,"avg_sa":lambda m:safe_mean([c.last_sa for c in m.crews]),"planning_quality":"planning_quality","trust_in_data":"trust_in_data","trust_in_management":"trust_in_management","avg_adoption":lambda m:safe_mean([c.adoption for c in m.crews]),"avg_effective_use":lambda m:safe_mean([c.effective_use() for c in m.crews]),"workface_picture_quality":lambda m:m.current_picture.workface_quality,"management_picture_quality":lambda m:m.current_picture.management_quality,"workface_gap":lambda m:m.current_picture.workface_gap,"total_idle_time":lambda m:sum(c.idle_time for c in m.crews),"total_idle_time_external":lambda m:sum(c.idle_time_external for c in m.crews),"total_working_time":lambda m:sum(c.working_time for c in m.crews),"total_interruptions":lambda m:sum(t.interruptions for t in m.tasks),"alternative_task_switches":"alternative_task_switches","failed_task_switches":"failed_task_switches","supervisor_recovery_interventions":"supervisor_recovery_interventions","external_disruptions":"external_disruptions","avg_recovery_time":lambda m:safe_mean(m.recovery_times),"idle_time_due_to_external_disruptions":"idle_time_due_to_external_disruptions","supervisor_reactive_time":lambda m:m.supervisor.last_reactive_time,"supervisor_planning_time":lambda m:m.supervisor.last_planning_time,"firefighting_ratio":lambda m:m.supervisor.last_firefighting_ratio,"supervisor_backlog":lambda m:m.supervisor.backlog,"active_external_blockages":lambda m:sum(t.external_blockage_active for t in m.tasks)}
+        return {
+            "scenario": lambda m: m.scenario.name,
+            "day": "day",
+            "completed_tasks": lambda m: sum(t.is_done for t in m.tasks),
+            "total_tasks": lambda m: len(m.tasks),
+            "ppc_proxy": lambda m: m.ppc_proxy,
+            "avg_sa": lambda m: safe_mean([c.last_sa for c in m.crews]),
+            "sa_std": lambda m: pstdev([c.last_sa for c in m.crews]) if len(m.crews) > 1 else 0.0,
+            "avg_decision_delay_proxy": lambda m: safe_mean([
+                clamp_range(
+                    3.0*m.scenario.decision_centralization*(1.0-c.last_sa)
+                    + 1.2*m.scenario.reporting_burden*(1.0-m.trust_in_management)
+                    + m.scenario.overload_delay_effect*m.supervisor.backlog,
+                    0.05, 6.5
+                ) for c in m.crews
+            ]),
+            "planning_quality": "planning_quality",
+            "trust_in_data": "trust_in_data",
+            "trust_in_management": "trust_in_management",
+            "data_quality_modifier": "data_quality_modifier",
+            "avg_adoption": lambda m: safe_mean([c.adoption for c in m.crews]),
+            "avg_effective_use": lambda m: safe_mean([c.effective_use() for c in m.crews]),
+            "workface_picture_quality": lambda m: m.current_picture.workface_quality,
+            "management_picture_quality": lambda m: m.current_picture.management_quality,
+            "workface_gap": lambda m: m.current_picture.workface_gap,
+            "total_idle_time": lambda m: sum(c.idle_time for c in m.crews),
+            "total_idle_time_external": lambda m: sum(c.idle_time_external for c in m.crews),
+            "total_working_time": lambda m: sum(c.working_time for c in m.crews),
+            "total_interruptions": lambda m: sum(t.interruptions for t in m.tasks),
+            "prevented_interruptions": lambda m: sum(c.prevented_interruptions for c in m.crews),
+            "total_movements": lambda m: sum(c.movements for c in m.crews),
+            "autonomous_resolutions": lambda m: sum(c.autonomous_resolutions for c in m.crews),
+            "escalations": lambda m: sum(c.escalations for c in m.crews),
+            "alternative_task_switches": "alternative_task_switches",
+            "failed_task_switches": "failed_task_switches",
+            "supervisor_recovery_interventions": "supervisor_recovery_interventions",
+            "external_disruptions": "external_disruptions",
+            "avg_recovery_time": lambda m: safe_mean(m.recovery_times),
+            "avg_blockage_resolution_time": lambda m: safe_mean(m.blockage_resolution_times),
+            "total_recovery_time": "total_recovery_time",
+            "idle_time_due_to_external_disruptions": "idle_time_due_to_external_disruptions",
+            "supervisor_reactive_time": lambda m: m.supervisor.last_reactive_time,
+            "supervisor_planning_time": lambda m: m.supervisor.last_planning_time,
+            "supervisor_reporting_time": lambda m: m.supervisor.last_reporting_time,
+            "supervisor_utilization": lambda m: m.supervisor.last_utilization,
+            "supervisor_backlog": lambda m: m.supervisor.backlog,
+            "supervisor_response_delay": lambda m: m.supervisor.last_response_delay,
+            "firefighting_ratio": lambda m: m.supervisor.last_firefighting_ratio,
+            "crew_questions": "daily_questions",
+            "cumulative_crew_questions": lambda m: m.supervisor.cumulative_questions,
+            "unresolved_questions": lambda m: m.supervisor.last_unresolved_questions,
+            "cumulative_unresolved_questions": lambda m: m.supervisor.cumulative_unresolved_questions,
+            "cumulative_planning_time": lambda m: m.supervisor.cumulative_planning_time,
+            "cumulative_reactive_time": lambda m: m.supervisor.cumulative_reactive_time,
+            "active_external_blockages": lambda m: sum(t.external_blockage_active for t in m.tasks),
+            "dvm_usefulness_events": "useful_dvm_events",
+            "harmful_events": "harmful_events",
+            "material_shortage_count": lambda m: m.external_disruptions_by_type.get("material_shortage", 0),
+            "logistics_delay_count": lambda m: m.external_disruptions_by_type.get("logistics_delay", 0),
+            "lifting_delay_count": lambda m: m.external_disruptions_by_type.get("lifting_delay", 0),
+            "design_missing_count": lambda m: m.external_disruptions_by_type.get("design_information_missing", 0),
+            "equipment_unavailable_count": lambda m: m.external_disruptions_by_type.get("equipment_unavailable", 0),
+            "weather_condition_count": lambda m: m.external_disruptions_by_type.get("weather_or_site_condition", 0),
+        }
+
     @property
     def ppc_proxy(self):
         due=[t for t in self.tasks if t.planned_start+t.planned_duration<=self.day]; return sum(t.is_done for t in due)/len(due) if due else 0

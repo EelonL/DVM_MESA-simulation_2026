@@ -1,1 +1,4 @@
-
+# Optional scenario configuration file.
+# The Python package includes built-in defaults. Add full scenario definitions here later
+# when you want to tune parameters without editing Python code.
+scenarios: {}

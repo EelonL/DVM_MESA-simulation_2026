@@ -154,6 +154,13 @@ class SupervisorAgent(MesaCompatAgent):
         escalation_handling_time,
         reporting_time_base,
         coordination_task_time,
+        base_admin_load=0.0,
+        management_reporting_load=0.0,
+        procurement_admin_load=0.0,
+        authority_reporting_load=0.0,
+        meeting_load=0.0,
+        admin_variability=0.0,
+        planning_need_per_day=2.0,
     ):
         super().__init__(model, unique_id)
 
@@ -163,6 +170,13 @@ class SupervisorAgent(MesaCompatAgent):
         self.escalation_handling_time = escalation_handling_time
         self.reporting_time_base = reporting_time_base
         self.coordination_task_time = coordination_task_time
+        self.base_admin_load = base_admin_load
+        self.management_reporting_load = management_reporting_load
+        self.procurement_admin_load = procurement_admin_load
+        self.authority_reporting_load = authority_reporting_load
+        self.meeting_load = meeting_load
+        self.admin_variability = admin_variability
+        self.planning_need_per_day = planning_need_per_day
         self.recovery_intervention_time = 0.75
 
         # Accumulated supervisor state
@@ -170,6 +184,8 @@ class SupervisorAgent(MesaCompatAgent):
         self.cumulative_reactive_time = 0.0
         self.cumulative_planning_time = 0.0
         self.cumulative_reporting_time = 0.0
+        self.cumulative_base_workload = 0.0
+        self.cumulative_planning_shortfall = 0.0
         self.cumulative_questions = 0
         self.cumulative_escalations = 0
         self.cumulative_recovery_interventions = 0
@@ -180,6 +196,11 @@ class SupervisorAgent(MesaCompatAgent):
         self.last_reactive_time = 0.0
         self.last_planning_time = 0.0
         self.last_reporting_time = 0.0
+        self.last_base_workload = 0.0
+        self.last_planning_need = 0.0
+        self.last_planning_shortfall = 0.0
+        self.last_available_planning_capacity = 0.0
+        self.last_total_workload = 0.0
         self.last_utilization = 0.0
         self.last_response_delay = 0.0
         self.last_firefighting_ratio = 0.0
@@ -198,35 +219,77 @@ class SupervisorAgent(MesaCompatAgent):
     ):
         s = self.model.dvm_scenario
         m = self.model
+        r = getattr(m, "py_random", None)
 
-        reporting_time = s.reporting_burden * self.reporting_time_base
+        # Worker-independent supervisor base workload:
+        # reporting to management, invoice/order handling, authority documentation,
+        # meetings and other administrative duties.
+        variability = 0.0
+        if r is not None and self.admin_variability > 0:
+            variability = r.normalvariate(0.0, self.admin_variability)
+
+        dvm_reporting_time = s.reporting_burden * self.reporting_time_base
+        base_workload = max(
+            0.0,
+            self.base_admin_load
+            + self.management_reporting_load
+            + self.procurement_admin_load
+            + self.authority_reporting_load
+            + self.meeting_load
+            + dvm_reporting_time
+            + variability,
+        )
+
         reactive = (
             questions * self.question_handling_time
             + escalations * self.escalation_handling_time
             + coordination_needs * self.coordination_task_time
             + recovery_interventions * self.recovery_intervention_time
-            + reporting_time
         )
 
-        backlog_work = min(self.backlog, self.capacity_per_day * 0.5)
-        total = reactive + backlog_work
+        backlog_work = min(self.backlog, self.capacity_per_day * 0.35)
+        planning_need = self.planning_need_per_day
 
-        planning = max(0.0, self.capacity_per_day - total)
-        overload = max(0.0, total - self.capacity_per_day)
+        available_after_base_and_reactive = max(
+            0.0,
+            self.capacity_per_day - base_workload - reactive - backlog_work,
+        )
+        planning = min(planning_need, available_after_base_and_reactive)
+        planning_shortfall = max(0.0, planning_need - planning)
+
+        total_actual_work = base_workload + reactive + backlog_work + planning
+        overload = max(0.0, base_workload + reactive + backlog_work - self.capacity_per_day)
         unresolved = overload / max(self.question_handling_time, 0.01)
 
-        backlog_reduction = max(0.0, self.capacity_per_day - reactive) * 0.25
-        self.backlog = max(0.0, self.backlog + overload - backlog_reduction)
+        # Backlog grows from true overload and from uncompleted planning work,
+        # but only true overload creates unresolved crew questions.
+        spare_after_required = max(
+            0.0,
+            self.capacity_per_day - base_workload - reactive - planning,
+        )
+        backlog_reduction = spare_after_required * 0.20
+        self.backlog = max(
+            0.0,
+            self.backlog + overload + 0.35 * planning_shortfall - backlog_reduction,
+        )
 
         self.last_reactive_time = reactive
         self.last_planning_time = planning
-        self.last_reporting_time = reporting_time
-        self.last_utilization = total / max(self.capacity_per_day, 0.01)
+        self.last_reporting_time = dvm_reporting_time
+        self.last_base_workload = base_workload
+        self.last_planning_need = planning_need
+        self.last_planning_shortfall = planning_shortfall
+        self.last_available_planning_capacity = available_after_base_and_reactive
+        self.last_total_workload = total_actual_work
+        self.last_utilization = total_actual_work / max(self.capacity_per_day, 0.01)
         self.last_response_delay = (
             0.15
             + s.overload_delay_effect * self.backlog
-            + 0.25 * max(0.0, self.last_utilization - 1)
+            + 0.30 * max(0.0, self.last_utilization - 1)
+            + 0.08 * planning_shortfall
         )
+        # Firefighting ratio is the share of production-management time that is reactive.
+        # Base administration is reported separately.
         self.last_firefighting_ratio = reactive / max(reactive + planning, 0.01)
         self.last_questions = questions
         self.last_escalations = escalations
@@ -235,7 +298,9 @@ class SupervisorAgent(MesaCompatAgent):
 
         self.cumulative_reactive_time += reactive
         self.cumulative_planning_time += planning
-        self.cumulative_reporting_time += reporting_time
+        self.cumulative_reporting_time += dvm_reporting_time
+        self.cumulative_base_workload += base_workload
+        self.cumulative_planning_shortfall += planning_shortfall
         self.cumulative_questions += questions
         self.cumulative_escalations += escalations
         self.cumulative_recovery_interventions += recovery_interventions
@@ -243,8 +308,9 @@ class SupervisorAgent(MesaCompatAgent):
 
         planning_gain = s.proactive_planning_effect * planning * (1 - m.planning_quality)
         planning_loss = (
-            0.014 * overload
-            + 0.006 * self.backlog
+            0.018 * overload
+            + 0.012 * planning_shortfall
+            + 0.008 * self.backlog
             + 0.010 * external_pressure
             + 0.004 * s.reporting_burden * (1 - m.trust_in_management)
             + s.planning_decay

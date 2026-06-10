@@ -42,7 +42,22 @@ class DVMConstructionModel(Model):
         for i,tr in enumerate(["drywall","mep","finishes","carpentry","drywall","mep"]):
             ad=clamp(.35+.48*self.dvm_scenario.crew_access-.18*self.dvm_scenario.reporting_burden+r.normalvariate(0,.08)); comp=clamp(self.dvm_scenario.compliance_pressure*(.45+.45*self.dvm_scenario.management_access))
             self.crews.append(CrewAgent(self,1000+i,tr,[0,2,4,6,8,10][i],clamp(r.normalvariate(.6,.15)),clamp(r.normalvariate(.5+.25*self.dvm_scenario.crew_access,.15)),clamp_range(r.normalvariate(1,.1),.75,1.25),ad,comp))
-        self.supervisor=SupervisorAgent(self,9000,self.dvm_scenario.supervisor_capacity,self.dvm_scenario.question_handling_time,self.dvm_scenario.escalation_handling_time,self.dvm_scenario.reporting_time_base,self.dvm_scenario.coordination_task_time)
+        self.supervisor=SupervisorAgent(
+            self,
+            9000,
+            self.dvm_scenario.supervisor_capacity,
+            self.dvm_scenario.question_handling_time,
+            self.dvm_scenario.escalation_handling_time,
+            self.dvm_scenario.reporting_time_base,
+            self.dvm_scenario.coordination_task_time,
+            self.dvm_scenario.supervisor_base_workload,
+            self.dvm_scenario.management_reporting_load,
+            self.dvm_scenario.procurement_admin_load,
+            self.dvm_scenario.authority_reporting_load,
+            self.dvm_scenario.meeting_load,
+            self.dvm_scenario.admin_variability,
+            self.dvm_scenario.planning_need_per_day,
+        )
     def _reporters(self):
         return {
             "scenario": lambda m: m.dvm_scenario.name,
@@ -100,6 +115,13 @@ class DVMConstructionModel(Model):
             "supervisor_reactive_time": lambda m: m.supervisor.last_reactive_time,
             "supervisor_planning_time": lambda m: m.supervisor.last_planning_time,
             "supervisor_reporting_time": lambda m: m.supervisor.last_reporting_time,
+            "supervisor_base_workload": lambda m: m.supervisor.last_base_workload,
+            "supervisor_total_workload": lambda m: m.supervisor.last_total_workload,
+            "supervisor_planning_need": lambda m: m.supervisor.last_planning_need,
+            "supervisor_planning_shortfall": lambda m: m.supervisor.last_planning_shortfall,
+            "supervisor_available_planning_capacity": lambda m: m.supervisor.last_available_planning_capacity,
+            "cumulative_base_workload": lambda m: m.supervisor.cumulative_base_workload,
+            "cumulative_planning_shortfall": lambda m: m.supervisor.cumulative_planning_shortfall,
             "supervisor_utilization": lambda m: m.supervisor.last_utilization,
             "supervisor_backlog": lambda m: m.supervisor.backlog,
             "supervisor_response_delay": lambda m: m.supervisor.last_response_delay,
@@ -246,9 +268,31 @@ class DVMConstructionModel(Model):
         self.daily_questions=self.daily_escalations=self.daily_coordination_needs=self.daily_recovery_interventions=0; self.daily_external_pressure=0; self.daily_useful=0; self.daily_harmful=0
         self._update_blockages(); self.current_picture=self._picture(); self._update_readiness()
         for c in list(self.crews): c.step()
+        self.daily_coordination_needs += self._baseline_coordination_needs()
         self.supervisor.process_day(self.daily_questions,self.daily_escalations,self.daily_coordination_needs,self.daily_recovery_interventions,self.daily_external_pressure)
         self._update_trust(); self.datacollector.collect(self); self.day+=1
         if self.day>=self.max_days or sum(t.is_done for t in self.tasks)==len(self.tasks): self.running=False
+    def _baseline_coordination_needs(self):
+        """Daily production coordination load not directly caused by crew questions.
+
+        Poor ready work area visibility, centralized decision-making and schedule
+        backlog create more coordination demand for the supervisor.
+        """
+        s = self.dvm_scenario
+        backlog_pressure = clamp(self.open_schedule_backlog / max(len(self.tasks), 1))
+        visibility_gap = 1.0 - self.current_picture.readiness_quality
+        info_gap = 1.0 - self.current_picture.workface_quality
+        return max(
+            0.0,
+            0.30
+            + 1.10 * visibility_gap
+            + 0.70 * info_gap
+            + 0.85 * s.decision_centralization
+            + 0.65 * backlog_pressure
+            - 0.55 * s.autonomy_level
+            - 0.35 * self.planning_quality,
+        )
+
     def _picture(self):
         s=self.dvm_scenario; r=self.py_random; base=.22*r.triangular(0,1,s.capture_rate)+.22*r.triangular(0,1,s.data_accuracy)+.2*r.triangular(0,1,s.data_timeliness)+.18*s.data_completeness+.18*s.integration_level
         adj=clamp(base*self.data_quality_modifier+.05*self.planning_quality-.1*s.reporting_burden); wf=clamp(adj*(.45*s.crew_access+.25*s.visual_clarity+.30*s.task_relevance)); mg=clamp(adj*(.60*s.management_access+.2*s.visual_clarity+.2*s.integration_level))
@@ -263,7 +307,19 @@ class DVMConstructionModel(Model):
         done={t.id for t in self.tasks if t.is_done}
         for t in self.tasks:
             if t.is_done or t.external_blockage_active: continue
-            prob=clamp(s.initial_plan_reliability+.09*s.integration_level+.08*self.current_picture.workface_quality+.2*self.planning_quality-.12*s.reporting_burden*(1-self.trust_in_management),.04,.98)
+            backlog_pressure = clamp(self.open_schedule_backlog / max(len(self.tasks), 1))
+            supervisor_pressure = clamp(self.supervisor.backlog / max(self.supervisor.capacity_per_day, 0.01))
+            prob=clamp(
+                s.initial_plan_reliability
+                + .12*s.integration_level
+                + .20*self.current_picture.workface_quality
+                + .18*self.current_picture.readiness_quality
+                + .22*self.planning_quality
+                - .18*backlog_pressure
+                - .10*supervisor_pressure
+                - .12*s.reporting_burden*(1-self.trust_in_management),
+                .04,.98
+            )
             if self.day<t.planned_start: prob*=.35
             if not t.material_ready and r.random()<prob: t.material_ready=True
             if not t.location_ready and r.random()<prob: t.location_ready=True
@@ -275,7 +331,9 @@ class DVMConstructionModel(Model):
             shock=self._pop_shock(c.trade)
             if shock: self._external(cur,c,sa,shock); return
             if self.py_random.random()<self.dvm_scenario.disturbance_probability*(1-.4*self.planning_quality): cur.interruptions+=1; c.escalations+=1; self.daily_escalations+=1; c.idle_time+=1
-            cur.remaining_duration-=c.productivity*clamp_range(.78+.22*sa.comprehension+.18*self.planning_quality-.08*self.dvm_scenario.reporting_burden,.55,1.3); c.working_time+=1
+            backlog_penalty=clamp_range(1.0-.018*self.open_schedule_backlog-.025*self.supervisor.backlog,.55,1.0)
+            progress_factor=clamp_range(.72+.24*sa.comprehension+.20*self.planning_quality+.08*self.current_picture.readiness_quality-.10*self.dvm_scenario.reporting_burden,.45,1.35)
+            cur.remaining_duration-=c.productivity*progress_factor*backlog_penalty; c.working_time+=1
             if cur.remaining_duration<=0: cur.status=TaskStatus.COMPLETED; cur.actual_finish=self.day; c.current_task_id=None
         else:
             task=self._choose_task(c)
@@ -285,22 +343,45 @@ class DVMConstructionModel(Model):
     def _sa(self,c):
         s=self.dvm_scenario; r=self.py_random; p=clamp(.1+.42*self.current_picture.workface_quality*c.effective_use()+.22*(.45*s.crew_access+.25*s.visual_clarity+.2*s.task_relevance+.1*c.dvm_skill)+.13*self.trust_in_data+.1*self.planning_quality+r.normalvariate(0,.04)); comp=clamp(.08+.36*p+.18*c.experience+.16*s.task_relevance+.12*self.trust_in_management+.14*self.planning_quality+r.normalvariate(0,.035)); proj=clamp(.05+.34*comp+.22*self.current_picture.recommendation_quality*c.effective_use()+.16*s.autonomy_level+.13*c.experience+.16*self.planning_quality+r.normalvariate(0,.035)); return AgentSA(p,comp,proj)
     def _question_prob(self,task,sa):
-        comp=.65 if task is None else task.complexity; s=self.dvm_scenario; return clamp(.22*comp*(1-sa.total)*(1-self.current_picture.workface_quality)*(1-self.planning_quality)+.04*s.reporting_burden*(1-self.trust_in_management),0,.65)
+        comp=.65 if task is None else task.complexity; s=self.dvm_scenario
+        backlog_pressure=clamp(self.open_schedule_backlog/max(len(self.tasks),1))
+        supervisor_pressure=clamp(self.supervisor.backlog/max(self.supervisor.capacity_per_day,.01))
+        uncertainty=(.55*(1-self.current_picture.workface_quality)+.25*(1-self.current_picture.readiness_quality)+.20*(1-self.planning_quality))
+        return clamp(
+            .04
+            + .34*comp*(1-sa.total)*uncertainty
+            + .07*s.decision_centralization*(1-s.autonomy_level)
+            + .05*s.reporting_burden*(1-self.trust_in_management)
+            + .08*backlog_pressure
+            + .05*supervisor_pressure,
+            0,.75
+        )
     def _task(self,i): return next((t for t in self.tasks if t.id==i),None) if i is not None else None
     def _choose_task(self,c):
         cand=[t for t in self.tasks if t.trade==c.trade and t.status==TaskStatus.READY and not t.external_blockage_active and not t.is_done]
-        return max(cand,key=lambda t:t.priority+.2*self.planning_quality+.08*max(0,self.day-self._planned_finish(t))-.05*abs(t.location-c.location)) if cand else None
+        return max(cand,key=lambda t:t.priority+.18*self.planning_quality+.04*max(0,self.day-self._planned_finish(t))-.05*abs(t.location-c.location)) if cand else None
     def _pop_shock(self,trade):
         for sh in self.shock_schedule.get(self.day,[]):
             if not sh.consumed and sh.trade==trade: sh.consumed=True; return sh
         return None
     def _external(self,t,c,sa,shock):
         t.external_blockage_active=True; t.external_blockage_type=shock.disruption_type; t.external_blockage_started=self.day; t.external_blockage_remaining=shock.base_duration; t.status=TaskStatus.BLOCKED_EXTERNAL; t.interruptions+=1; self.external_disruptions+=1; self.external_disruptions_by_type[shock.disruption_type]=self.external_disruptions_by_type.get(shock.disruption_type,0)+1
-        p_alt=clamp(.08+.30*sa.total+.24*self.current_picture.workface_quality+.22*self.planning_quality+.18*self.current_picture.recommendation_quality+.12*self.dvm_scenario.autonomy_level-.10*self.dvm_scenario.decision_centralization)
+        backlog_pressure=clamp(self.open_schedule_backlog/max(len(self.tasks),1))
+        p_alt=clamp(
+            .05
+            + .28*sa.total
+            + .22*self.current_picture.workface_quality
+            + .18*self.current_picture.readiness_quality
+            + .18*self.planning_quality
+            + .20*self.current_picture.recommendation_quality
+            + .14*self.dvm_scenario.autonomy_level
+            - .10*self.dvm_scenario.decision_centralization
+            - .08*backlog_pressure
+        )
         if self.py_random.random()<p_alt:
             rec=self.py_random.uniform(.15,.8)*(1+.35*(1-sa.total)+.25*(1-self.planning_quality)); self.alternative_task_switches+=1; c.alternative_task_switches+=1; self.daily_useful+=1
         else:
-            rec=self.supervisor.last_response_delay+shock.base_duration*(1+.65*(1-self.planning_quality)+.45*(1-self.current_picture.workface_quality)+.25*self.dvm_scenario.reporting_burden)+self.py_random.uniform(.25,1.25); self.failed_task_switches+=1; c.failed_task_switches+=1; self.supervisor_recovery_interventions+=1; self.daily_questions+=1; self.daily_escalations+=1; self.daily_recovery_interventions+=1; self.daily_coordination_needs+=1; self.daily_harmful+=1
+            rec=self.supervisor.last_response_delay+shock.base_duration*(1+.75*(1-self.planning_quality)+.50*(1-self.current_picture.workface_quality)+.25*(1-self.current_picture.readiness_quality)+.20*self.dvm_scenario.reporting_burden+.15*backlog_pressure)+self.py_random.uniform(.25,1.25); self.failed_task_switches+=1; c.failed_task_switches+=1; self.supervisor_recovery_interventions+=1; self.daily_questions+=1; self.daily_escalations+=1; self.daily_recovery_interventions+=1; self.daily_coordination_needs+=1; self.daily_harmful+=1
         self.recovery_times.append(rec); self.total_recovery_time+=rec; c.idle_time+=rec; c.idle_time_external+=rec; self.idle_time_due_to_external_disruptions+=rec; c.current_task_id=None; self.daily_external_pressure+=1+.25*rec
     def _update_trust(self):
         s=self.dvm_scenario; gain=s.trust_sensitivity*self.daily_useful*(1-.6*s.reporting_burden); loss=s.trust_sensitivity*self.daily_harmful*(.35*s.reporting_burden+.45*s.perceived_surveillance+.2*(1-self.planning_quality))

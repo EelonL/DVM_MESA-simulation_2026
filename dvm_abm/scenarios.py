@@ -89,6 +89,18 @@ class Scenario:
     escalation_handling_time: float
     reporting_time_base: float
     coordination_task_time: float
+
+    # Worker-independent supervisor base workload.
+    # These represent daily management/admin work such as invoicing,
+    # ordering, reporting to management, authority documentation and meetings.
+    supervisor_base_workload: float
+    management_reporting_load: float
+    procurement_admin_load: float
+    authority_reporting_load: float
+    meeting_load: float
+    admin_variability: float
+    planning_need_per_day: float
+
     proactive_planning_effect: float
     overload_delay_effect: float
     planning_decay: float

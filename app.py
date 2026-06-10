@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v25_0_completion_promise_ppc"
+APP_DATA_VERSION = "v25_1_actual_completion_aligned_ppc"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -439,6 +439,8 @@ FRIENDLY_METRIC_NAMES = {
     "cumulative_schedule_adherence": "Cumulative schedule adherence",
     "ppc_schedule_score": "PPC schedule score",
     "ppc_schedule_consistency_gap": "PPC-schedule consistency gap",
+    "total_ppc_promises": "Total PPC promises",
+    "total_ppc_successes": "Total PPC successes",
     "completed_committed_tasks": "Completed committed tasks",
     "avg_make_ready_score": "Average make-ready score",
     "sound_commitment_share": "Sound commitment share",
@@ -612,6 +614,8 @@ def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
         "cumulative_schedule_adherence",
         "ppc_schedule_score",
         "ppc_schedule_consistency_gap",
+        "total_ppc_promises",
+        "total_ppc_successes",
         "avg_make_ready_score",
         "sound_commitment_share",
         "constraints_ready_count",
@@ -1085,6 +1089,8 @@ with tab_timeseries:
         "cumulative_schedule_adherence",
         "ppc_schedule_score",
         "ppc_schedule_consistency_gap",
+        "total_ppc_promises",
+        "total_ppc_successes",
         "weekly_task_capacity",
         "avg_make_ready_score",
         "sound_commitment_share",

@@ -37,7 +37,12 @@ class DVMConstructionModel(Model):
     def __init__(self, scenario: Scenario|None=None, seed:int=20260609, max_days:int=100, number_of_tasks:int=72, daily_shock_probability:float=.32):
         try: super().__init__(seed=seed)
         except TypeError: super().__init__()
-        object.__setattr__(self, "dvm_scenario", scenario or get_default_scenarios()[0]); self.seed=seed; self.max_days=max_days; self.day=0; self.running=True; self.py_random=random.Random(seed)
+        object.__setattr__(self, "dvm_scenario", scenario or get_default_scenarios()[0]); self.seed=seed
+        # In v24.7 max_days means planned project duration, not simulation cutoff.
+        self.planned_project_duration=max_days
+        self.max_days=max_days
+        self.simulation_hard_limit=max(max_days*4, max_days+200)
+        self.day=0; self.running=True; self.py_random=random.Random(seed)
         self.trust_in_data=self.dvm_scenario.initial_trust_in_data; self.trust_in_management=self.dvm_scenario.initial_trust_in_management; self.planning_quality=self.dvm_scenario.initial_planning_quality; self.data_quality_modifier=1.0
         self.useful_dvm_events=0; self.harmful_events=0; self.external_disruptions=0; self.external_disruptions_by_type={}; self.recovery_times=[]; self.blockage_resolution_times=[]
         self.total_recovery_time=0.0; self.alternative_task_switches=0; self.failed_task_switches=0; self.supervisor_recovery_interventions=0; self.idle_time_due_to_external_disruptions=0.0
@@ -46,16 +51,17 @@ class DVMConstructionModel(Model):
         self.weekly_commitments={}; self.current_committed_task_ids=set()
         self.commitment_history={}
         self.week_length=5; self.current_picture=SituationPicture(0,0,0,0,0,0,0); self.trades=["drywall","mep","finishes","carpentry"]
-        self.shock_schedule=generate_external_shock_schedule(seed,self.trades,max_days+40,daily_shock_probability)
-        self.planned_workload_by_day=[0 for _ in range(max_days+1)]
-        self.resource_capacity_by_day=[0.0 for _ in range(max_days+1)]
+        self.shock_schedule=generate_external_shock_schedule(seed,self.trades,self.simulation_hard_limit+40,daily_shock_probability)
+        self.planned_workload_by_day=[0 for _ in range(self.simulation_hard_limit+1)]
+        self.resource_capacity_by_day=[0.0 for _ in range(self.simulation_hard_limit+1)]
         self.active_crews_today=0
         self.available_crew_capacity_today=0.0
         self.planned_workload_today=0.0
         self.workload_pressure=0.0
         self.tasks=[]; self.crews=[]; self._create_project(number_of_tasks)
         self._build_workload_and_resource_curves()
-        self.planned_project_finish=max((self._planned_finish(t) for t in self.tasks), default=0.0)
+        self.planned_project_finish=float(self.planned_project_duration)
+        self.baseline_last_planned_task_finish=max((self._planned_finish(t) for t in self.tasks), default=0.0)
         self.datacollector=DataCollector(model_reporters=self._reporters()); self.datacollector.collect(self)
     def _sample_workload_ratio(self):
         """Sample a planned task timing ratio in [0, 1] from the workload curve."""
@@ -80,10 +86,11 @@ class DVMConstructionModel(Model):
     def _build_workload_and_resource_curves(self):
         """Build planned workload and daily active crew resource curves."""
         s=self.dvm_scenario
-        days=max(1,self.max_days)
+        planned_days=max(1,self.planned_project_duration)
+        days=max(1,self.simulation_hard_limit)
         self.planned_workload_by_day=[0 for _ in range(days+1)]
         for t in self.tasks:
-            pf=int(clamp_range(self._planned_finish(t),0,days))
+            pf=int(clamp_range(self._planned_finish(t),0,planned_days))
             self.planned_workload_by_day[pf]+=1
 
         shape=getattr(s,"resource_shape","under_resourced_peak")
@@ -92,7 +99,7 @@ class DVMConstructionModel(Model):
         under=clamp_range(float(getattr(s,"peak_underresource_factor",.8)),.2,1.2)
         alpha=max(.2,float(getattr(s,"resource_alpha",2.2)))
         beta=max(.2,float(getattr(s,"resource_beta",2.2)))
-        curve=self._curve_values(days,alpha,beta)
+        curve=self._curve_values(planned_days,alpha,beta)
 
         # Scale curve to crew counts. Under-resourced peak means the resource peak
         # intentionally stays below the workload peak.
@@ -105,7 +112,11 @@ class DVMConstructionModel(Model):
             else:
                 crews=round(min_crews+(max_crews-min_crews)*clamp_range(v*under,.0,1.0))
             resource.append(clamp_range(crews,min_crews,max_crews))
-        self.resource_capacity_by_day=resource+[resource[-1] if resource else min_crews]
+        if resource:
+            tail=[max(min_crews, min(max_crews, int(round(min_crews)))) for _ in range(max(0, days-len(resource)+1))]
+            self.resource_capacity_by_day=resource+tail
+        else:
+            self.resource_capacity_by_day=[min_crews for _ in range(days+1)]
 
     def _update_daily_load_state(self):
         day_index=int(clamp_range(self.day,0,len(self.resource_capacity_by_day)-1))
@@ -154,8 +165,12 @@ class DVMConstructionModel(Model):
             "scenario": lambda m: m.dvm_scenario.name,
             "day": "day",
             "week": lambda m: m.current_week,
+            "planned_project_duration": lambda m: m.planned_project_duration,
+            "simulation_hard_limit": lambda m: m.simulation_hard_limit,
             "completed_tasks": lambda m: sum(t.is_done for t in m.tasks),
+            "remaining_tasks": lambda m: sum(not t.is_done for t in m.tasks),
             "total_tasks": lambda m: len(m.tasks),
+            "actual_project_finish": lambda m: m.actual_project_finish,
             "planned_workload_today": lambda m: m.planned_workload_today,
             "active_crews_today": lambda m: m.active_crews_today,
             "available_crew_capacity_today": lambda m: m.available_crew_capacity_today,
@@ -394,12 +409,18 @@ class DVMConstructionModel(Model):
         )
 
     @property
+    def actual_project_finish(self):
+        if not self.tasks or not all(t.is_done for t in self.tasks):
+            return None
+        return max((t.actual_finish or 0) for t in self.tasks)
+
+    @property
     def project_delay_days(self):
-        if not self.tasks:
-            return 0.0
-        all_done = all(t.is_done for t in self.tasks)
-        if all_done:
-            actual_finish = max((t.actual_finish or 0) for t in self.tasks)
+        # In v24.7 this is realized delay whenever all tasks are complete.
+        # During an unfinished run it is a provisional delay-to-date, but normal
+        # simulation should continue until completion.
+        actual_finish = self.actual_project_finish
+        if actual_finish is not None:
             return max(0.0, actual_finish - self.planned_project_finish)
         return max(0.0, self.day - self.planned_project_finish)
 
@@ -430,7 +451,8 @@ class DVMConstructionModel(Model):
         self.daily_coordination_needs += self._baseline_coordination_needs()
         self.supervisor.process_day(self.daily_questions,self.daily_escalations,self.daily_coordination_needs,self.daily_recovery_interventions,self.daily_external_pressure)
         self._update_trust(); self.datacollector.collect(self); self.day+=1
-        if self.day>=self.max_days or sum(t.is_done for t in self.tasks)==len(self.tasks): self.running=False
+        if sum(t.is_done for t in self.tasks)==len(self.tasks): self.running=False
+        if self.day>=self.simulation_hard_limit: self.running=False
     def _baseline_coordination_needs(self):
         """Daily production coordination load not directly caused by crew questions.
 

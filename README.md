@@ -1,61 +1,36 @@
-# DVM-ABM v24.6 update
+# DVM-ABM v24.7 update
 
-This update adds the LPS core logic discussed in the chat:
-make-ready constraints, weekly commitments, PPC based on commitments, and making-do.
+This update changes the meaning of the user-defined project duration.
 
-## Main additions
+## Main change
 
-### 1. LPS prerequisite constraints
-Each task now has eight prerequisites:
-- design_ready
-- material_ready
-- crew_ready
-- equipment_ready
-- space_ready
-- predecessor_ready
-- approval_ready
-- safety_quality_ready
+`Planned project duration, days` is now the planned completion target of the project, not the simulation cutoff.
 
-These form a `make_ready_score`.
+The simulation continues until:
+1. all tasks are complete, or
+2. a safety hard limit is reached: `max(planned_duration * 4, planned_duration + 200)`.
 
-### 2. Weekly commitments
-At the beginning of each simulation week the model creates LPS weekly commitments.
-PPC is now calculated as:
+## Consequences
 
-`completed committed tasks / weekly committed tasks`
-
-Baseline adherence remains separate from PPC.
-
-### 3. Making-do
-In poorer scenarios, tasks may be started even when not all prerequisites are ready.
-Making-do increases:
-- interruptions
-- rework
-- supervisor coordination needs
-- risk of PPC failure
-
-### 4. Scenario differences
-Scenarios now differ in:
-- constraint screening strength
-- make-ready threshold
-- commitment realism
-- overcommitment tendency
-- making-do tendency
-- making-do interruption and rework effects
+- `project_delay_days` is now realized delay when the project completes:
+  `actual_project_finish - planned_project_duration`
+- Scenario delay comparisons should now show real differences between scenarios.
+- A project planned for 100 days may finish at day 105, 130, 180, etc.
+- `remaining_tasks` and `actual_project_finish` are included in outputs.
 
 ## Files to replace
 
 - `app.py`
 - `dvm_abm/model.py`
-- `dvm_abm/agents.py`
-- `dvm_abm/scenarios.py`
-- `config/scenarios.yaml`
+- `dvm_abm/analysis.py`
+
+The other files are included for consistency.
 
 ## Git commands
 
 ```bash
-git add app.py dvm_abm/model.py dvm_abm/agents.py dvm_abm/scenarios.py config/scenarios.yaml
-git commit -m "Add LPS constraints weekly commitments and making-do"
+git add app.py dvm_abm/model.py dvm_abm/analysis.py
+git commit -m "Run simulation until all tasks are complete"
 git push
 ```
 

@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v24_6_1_lps_scenario_cache_fix"
+APP_DATA_VERSION = "v24_7_run_until_all_tasks_complete"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -414,7 +414,7 @@ FRIENDLY_METRIC_NAMES = {
     "last_completed_weekly_ppc": "Last completed weekly PPC",
     "open_schedule_backlog": "Open schedule backlog",
     "cumulative_plan_failures": "Accumulated plan failures",
-    "project_delay_days": "Project delay, days",
+    "project_delay_days": "Realized project delay, days",
     "avg_lateness_days": "Average lateness, days",
     "late_completed_tasks": "Late completed tasks",
     "avg_sa": "Crew situation awareness",
@@ -673,7 +673,7 @@ with st.sidebar:
 
     st.markdown("**Simulation settings**")
     runs = st.slider("Runs", 5, 100, 30, step=5)
-    max_days = st.slider("Max days", 50, 200, 100, step=10)
+    max_days = st.slider("Planned project duration, days", 50, 200, 100, step=10)
     base_seed = st.number_input("Base seed", value=20260609, step=1)
 
     st.divider()

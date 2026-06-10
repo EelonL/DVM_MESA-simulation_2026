@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v24_7_run_until_all_tasks_complete"
+APP_DATA_VERSION = "v24_9_weekly_task_ppc_fix"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -435,6 +435,8 @@ FRIENDLY_METRIC_NAMES = {
     "workload_pressure": "Workload pressure",
     "baseline_adherence": "Baseline adherence",
     "weekly_committed_tasks": "Weekly committed tasks",
+    "weekly_task_capacity": "Weekly task capacity",
+    "cumulative_schedule_adherence": "Cumulative schedule adherence",
     "completed_committed_tasks": "Completed committed tasks",
     "avg_make_ready_score": "Average make-ready score",
     "sound_commitment_share": "Sound commitment share",
@@ -604,6 +606,8 @@ def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
         "baseline_adherence",
         "weekly_committed_tasks",
         "completed_committed_tasks",
+        "weekly_task_capacity",
+        "cumulative_schedule_adherence",
         "avg_make_ready_score",
         "sound_commitment_share",
         "constraints_ready_count",
@@ -614,6 +618,8 @@ def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
         "cumulative_making_do_interruptions",
         "rework_due_to_making_do",
         "cumulative_rework_due_to_making_do",
+        "hard_limit_reached",
+        "incomplete_at_hard_limit",
     ]
     for col in fallback_zero_cols:
         if col not in df.columns:
@@ -1072,6 +1078,8 @@ with tab_timeseries:
         "project_delay_days",
         "workload_pressure",
         "baseline_adherence",
+        "cumulative_schedule_adherence",
+        "weekly_task_capacity",
         "avg_make_ready_score",
         "sound_commitment_share",
         "cumulative_making_do_starts",

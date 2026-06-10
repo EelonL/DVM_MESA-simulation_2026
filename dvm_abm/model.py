@@ -52,6 +52,7 @@ class DVMConstructionModel(Model):
         # v25.1: track actual completion promises so PPC cannot miss tasks that
         # are truly completed during a week.
         self.weekly_actual_completion_promises={}
+        self.task_commitment_counts={}
         self.commitment_history={}
         self.week_length=5; self.current_picture=SituationPicture(0,0,0,0,0,0,0); self.trades=["drywall","mep","finishes","carpentry"]
         self.shock_schedule=generate_external_shock_schedule(seed,self.trades,self.simulation_hard_limit+40,daily_shock_probability)
@@ -143,10 +144,14 @@ class DVMConstructionModel(Model):
         r=self.py_random
         for i in range(n):
             pred=[r.randrange(max(1,i-10),i)] if i>6 and r.random()<.6 else []
-            # Planned task timing follows the project workload curve instead of a flat random distribution.
+            # v25.2: distribute planned task finishes over the full planned
+            # project duration. Earlier versions compressed task finishes into
+            # about 82% of the project duration, which made near-on-time projects
+            # look late at task/PPC level.
             start_ratio=self._sample_workload_ratio()
-            planned_start=int(start_ratio*max(1,self.max_days*.82))
             planned_duration=r.randint(1,5)
+            planned_finish=int(clamp_range(round(start_ratio*self.planned_project_duration), planned_duration, self.planned_project_duration))
+            planned_start=max(0, planned_finish-planned_duration)
             t=TaskAgent(self,i,r.choice(self.trades),r.randrange(12),planned_start,planned_duration,r.uniform(.2,1),r.uniform(.35,1),pred); self.tasks.append(t)
         # Create the maximum potential crew pool. Daily resource curve decides how many are active.
         crew_pool=[]
@@ -178,6 +183,7 @@ class DVMConstructionModel(Model):
             "day": "day",
             "week": lambda m: m.current_week,
             "planned_project_duration": lambda m: m.planned_project_duration,
+            "baseline_last_planned_task_finish": lambda m: m.baseline_last_planned_task_finish,
             "simulation_hard_limit": lambda m: m.simulation_hard_limit,
             "completed_tasks": lambda m: sum(t.is_done for t in m.tasks),
             "remaining_tasks": lambda m: sum(not t.is_done for t in m.tasks),
@@ -312,7 +318,7 @@ class DVMConstructionModel(Model):
     def _actual_completion_promises_in_week(self, week):
         """Tasks actually completed during this week.
 
-        v25.1 interpretation:
+        v25.2 interpretation:
         If a task is completed in week W, it should be counted as a promised
         completion of week W unless it was already explicitly promised in another
         commitment set. This aligns PPC with actual weekly completion promises
@@ -711,7 +717,7 @@ class DVMConstructionModel(Model):
     def _make_weekly_commitments(self):
         """Create LPS weekly completion promises.
 
-        v25.0 modelling assumption:
+        v25.2 modelling assumption:
         - LPS tasks are weekly-sized packages.
         - The weekly plan promises completions, not merely starts.
         - Tasks planned to finish this week form the baseline promise set.
@@ -751,6 +757,14 @@ class DVMConstructionModel(Model):
             t for t in open_tasks
             if self._planned_finish(t) < start
             and t not in in_progress_promises
+            # v25.2: avoid endless recommitment of the same unsound task.
+            # A repeatedly failed carryover task needs to be in progress or sound
+            # before it is promised again.
+            and (
+                self.task_commitment_counts.get(t.id, 0) < 2
+                or t.status == TaskStatus.IN_PROGRESS
+                or self._is_sound_task(t)
+            )
         ]
 
         lookahead = [
@@ -821,6 +835,8 @@ class DVMConstructionModel(Model):
                 break
 
         ids = {t.id for t in committed}
+        for t in committed:
+            self.task_commitment_counts[t.id]=self.task_commitment_counts.get(t.id,0)+1
         self.current_committed_task_ids = ids
         self.weekly_commitments[week] = ids
         self.commitment_history[week] = {

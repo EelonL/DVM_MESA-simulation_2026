@@ -190,6 +190,8 @@ class DVMConstructionModel(Model):
             "baseline_due_tasks_this_week": lambda m: m.planned_tasks_this_week,
             "weekly_committed_tasks": lambda m: m.weekly_committed_tasks,
             "completed_committed_tasks": lambda m: m.completed_committed_tasks,
+            "weekly_task_capacity": lambda m: m.weekly_task_capacity,
+            "cumulative_schedule_adherence": lambda m: m.cumulative_schedule_adherence,
             "planned_tasks_this_week": lambda m: m.planned_tasks_this_week,
             "completed_on_plan_this_week": lambda m: m.completed_on_plan_this_week,
             "baseline_adherence": lambda m: m.baseline_adherence,
@@ -317,9 +319,36 @@ class DVMConstructionModel(Model):
 
     def _weekly_ppc_value(self, week):
         committed = self._committed_in_week(week)
-        if not committed:
+        if committed:
+            return len(self._completed_committed_in_week(week)) / len(committed)
+
+        planned = self._planned_in_week(week)
+        if not planned:
+            return None
+        _, end = self._week_bounds(week)
+        done = [t for t in planned if t.actual_finish is not None and t.actual_finish <= end]
+        return len(done) / len(planned)
+
+    @property
+    def weekly_task_capacity(self):
+        # In v24.9 one LPS task is assumed to be a weekly-sized package.
+        # Therefore capacity is roughly active crews per week, not active crews * 5 days.
+        s = self.dvm_scenario
+        return max(1, int(round(
+            self.active_crews_today
+            * s.commitment_capacity_factor
+            * (0.90 + 0.35 * s.commitment_realism + 0.12 * s.autonomy_level)
+        )))
+
+    @property
+    def cumulative_schedule_adherence(self):
+        # Cumulative planned-completion reliability up to the current week.
+        _, end = self._week_bounds(self.current_week)
+        due = [t for t in self.tasks if self._planned_finish(t) <= end]
+        if not due:
             return 0.0
-        return len(self._completed_committed_in_week(week)) / len(committed)
+        done = [t for t in due if t.actual_finish is not None and t.actual_finish <= end]
+        return len(done) / len(due)
 
     @property
     def planned_tasks_this_week(self):
@@ -349,22 +378,25 @@ class DVMConstructionModel(Model):
 
     @property
     def weekly_ppc(self):
-        return self._weekly_ppc_value(self.current_week)
+        value = self._weekly_ppc_value(self.current_week)
+        return 0.0 if value is None else value
 
     @property
     def last_completed_weekly_ppc(self):
         completed_weeks = [w for w in range(1, self.current_week + 1) if self.day >= self._week_bounds(w)[1]]
-        completed_weeks = [w for w in completed_weeks if self._committed_in_week(w)]
-        if not completed_weeks:
-            return self.weekly_ppc
-        return self._weekly_ppc_value(max(completed_weeks))
+        values = [(w, self._weekly_ppc_value(w)) for w in completed_weeks]
+        values = [(w, v) for w, v in values if v is not None]
+        if not values:
+            return self.weekly_ppc or 0.0
+        return values[-1][1]
 
     @property
     def avg_weekly_ppc(self):
         completed_weeks = [w for w in range(1, self.current_week + 1) if self.day >= self._week_bounds(w)[1]]
-        values = [self._weekly_ppc_value(w) for w in completed_weeks if self._committed_in_week(w)]
+        values = [self._weekly_ppc_value(w) for w in completed_weeks]
+        values = [v for v in values if v is not None]
         if not values:
-            return self.weekly_ppc
+            return self.weekly_ppc or 0.0
         return safe_mean(values)
 
     @property
@@ -625,51 +657,108 @@ class DVMConstructionModel(Model):
         return t.make_ready_score >= self.dvm_scenario.make_ready_threshold and t.constraints.get("predecessor_ready",False)
 
     def _make_weekly_commitments(self):
-        """Create LPS weekly commitments from sound tasks and a limited number of risky tasks."""
-        s=self.dvm_scenario; r=self.py_random
-        week=self.current_week
-        start,end=self._week_bounds(week)
-        due_window_end=end+max(0,int(2+self.workload_pressure*3))
-        candidates=[
+        """Create LPS weekly commitments from weekly-sized tasks.
+
+        v24.9 modelling assumption:
+        - LPS tasks are already broken down so that a committed task can be
+          completed within one week.
+        - Therefore weekly capacity is measured in crew-weeks/tasks, not crew-days.
+        - PPC measures promised weekly completions, while project delay measures
+          realized project completion.
+        """
+        s = self.dvm_scenario
+        r = self.py_random
+        week = self.current_week
+        start, end = self._week_bounds(week)
+
+        for t in self.tasks:
+            if t.committed_week == week:
+                t.committed_week = None
+                t.commitment_day = None
+                t.commitment_sound = False
+        self.current_committed_task_ids = set()
+
+        open_tasks = [
             t for t in self.tasks
             if not t.is_done and not t.external_blockage_active
             and t.status in (TaskStatus.NOT_READY, TaskStatus.READY, TaskStatus.INTERRUPTED)
-            and t.planned_start <= due_window_end
         ]
-        for t in self.tasks:
-            if t.committed_week==week:
-                t.committed_week=None; t.commitment_day=None; t.commitment_sound=False
-        self.current_committed_task_ids=set()
-        if not candidates:
-            self.weekly_commitments[week]=set()
-            return
-        weekly_capacity=max(1,int(self.active_crews_today*self.week_length*s.commitment_capacity_factor))
-        # More realistic scenarios commit fewer, better tasks. Poor scenarios overcommit.
-        target=max(1,int(weekly_capacity*(.72+.45*s.overcommitment_tendency-.18*s.commitment_realism)))
-        target=min(target,len(candidates))
-        candidates.sort(key=lambda t: (
-            1 if self._is_sound_task(t) else 0,
-            t.make_ready_score,
-            -abs(t.planned_start-self.day),
-            t.priority
-        ), reverse=True)
-        committed=[]
+
+        planned_this_week = [
+            t for t in open_tasks
+            if start <= self._planned_finish(t) <= end
+        ]
+
+        carryover = [
+            t for t in open_tasks
+            if self._planned_finish(t) < start
+        ]
+
+        lookahead = [
+            t for t in open_tasks
+            if end < self._planned_finish(t) <= end + self.week_length
+        ]
+
+        capacity = self.weekly_task_capacity
+        overcommit_multiplier = 1.0 + 0.45 * s.overcommitment_tendency - 0.22 * s.commitment_realism
+        target = max(1, int(round(capacity * overcommit_multiplier)))
+
+        candidates = []
+        candidates.extend(carryover)
+        candidates.extend(planned_this_week)
+        if len(candidates) < target:
+            candidates.extend(lookahead)
+
+        seen = set()
+        unique = []
         for t in candidates:
-            sound=self._is_sound_task(t)
-            risky_commit_prob=clamp((1-s.constraint_screening_strength)*s.overcommitment_tendency*(1+.7*self.workload_pressure))
-            if sound or r.random()<risky_commit_prob:
-                t.committed_week=week
-                t.commitment_day=self.day
-                t.commitment_sound=sound
+            if t.id not in seen:
+                unique.append(t)
+                seen.add(t.id)
+
+        if not unique:
+            self.weekly_commitments[week] = set()
+            return
+
+        def commit_score(t):
+            planned_urgency = 2.0 if start <= self._planned_finish(t) <= end else 0.0
+            carryover_urgency = 2.5 if self._planned_finish(t) < start else 0.0
+            sound_bonus = 2.0 if self._is_sound_task(t) else 0.0
+            return (
+                carryover_urgency
+                + planned_urgency
+                + sound_bonus
+                + 1.2 * t.make_ready_score
+                + t.priority
+                + 0.05 * max(0, self.day - self._planned_finish(t))
+            )
+
+        unique.sort(key=commit_score, reverse=True)
+
+        committed = []
+        for t in unique:
+            sound = self._is_sound_task(t)
+            risky_commit_prob = clamp(
+                (1 - s.constraint_screening_strength)
+                * s.overcommitment_tendency
+                * (1 + 0.45 * self.workload_pressure)
+            )
+            if sound or r.random() < risky_commit_prob:
+                t.committed_week = week
+                t.commitment_day = self.day
+                t.commitment_sound = sound
                 committed.append(t)
-            if len(committed)>=target:
+            if len(committed) >= target:
                 break
-        ids={t.id for t in committed}
-        self.current_committed_task_ids=ids
-        self.weekly_commitments[week]=ids
-        self.commitment_history[week]={
+
+        ids = {t.id for t in committed}
+        self.current_committed_task_ids = ids
+        self.weekly_commitments[week] = ids
+        self.commitment_history[week] = {
             "committed": len(committed),
             "sound": sum(t.commitment_sound for t in committed),
+            "capacity": capacity,
+            "target": target,
         }
 
     def _update_readiness(self):

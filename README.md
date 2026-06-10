@@ -1,53 +1,49 @@
-# DVM-ABM v24.4 update
+# DVM-ABM v24.5 update
 
-This update implements the modelling changes discussed after reviewing the PPC and supervisor workload charts.
+This update adds project workload and resource curves.
 
-## Main changes
+## Main additions
 
-### 1. Supervisor base workload
-The supervisor now has worker-independent daily base workload:
-- general administration
-- reporting to management
-- procurement/order administration
-- invoice/order handling proxy
-- authority/safety documentation
-- meetings
-- DVM reporting burden
+### 1. Beta-distributed planned workload
+Task planned starts are no longer uniformly distributed. The planned task timing is sampled from a beta distribution, producing a more realistic project workload curve:
+- low workload during mobilisation
+- peak workload in the middle
+- reduced workload during close-out
 
-This workload consumes capacity before proactive planning can happen.
+### 2. Variable active crew resources
+The model creates a larger potential crew pool, but each day only part of it is active according to a resource curve. This creates realistic differences between:
+- planned workload
+- available crew capacity
+- workload pressure
 
-### 2. Planning is no longer unlimited
-Unused supervisor capacity is no longer automatically converted into planning time. The model now uses `planning_need_per_day`, so planning time is capped and planning shortfall is tracked.
+### 3. Workload pressure
+A new metric `workload_pressure` compares planned weekly work against active crew capacity. It affects:
+- ready work area availability
+- production progress
+- crew questions
+- supervisor coordination needs
+- recovery from disruptions
 
-### 3. Stronger PPC / ready work area mechanism
-Weekly PPC now depends more strongly on:
-- ready work area picture quality
-- readiness visibility
-- planning quality
-- open schedule backlog
-- supervisor backlog
-
-Backlog now also reduces production progress, so plan failures can accumulate and delay the project.
-
-### 4. Stronger supervisor load mechanism
-Poor information quality, low ready work area visibility, centralised decision-making and backlog now create baseline coordination needs even when crews do not explicitly ask questions.
-
-### 5. Updated scenario configuration
-`config/scenarios.yaml` includes new supervisor workload parameters. Forced reporting DVM has the highest reporting/admin burden; ready work area and lean-autonomous DVM reduce some admin/manual coordination burden.
+### 4. Streamlit visualisation
+The Overview tab now includes:
+- `Planned workload and active crew resources`
+- new metrics for workload pressure and active crews
+- sidebar controls for maximum active crews and peak resource fit
 
 ## Files to replace
 
 - `app.py`
 - `dvm_abm/model.py`
-- `dvm_abm/agents.py`
 - `dvm_abm/scenarios.py`
 - `config/scenarios.yaml`
+
+`dvm_abm/agents.py` is included for completeness but is unchanged from v24.4.
 
 ## Git commands
 
 ```bash
-git add app.py dvm_abm/model.py dvm_abm/agents.py dvm_abm/scenarios.py config/scenarios.yaml
-git commit -m "Add supervisor base workload and stronger PPC dynamics"
+git add app.py dvm_abm/model.py dvm_abm/scenarios.py config/scenarios.yaml
+git commit -m "Add project workload and variable crew resource curves"
 git push
 ```
 

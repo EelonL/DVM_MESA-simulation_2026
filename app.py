@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v24_4_1_scenario_cache_fix"
+APP_DATA_VERSION = "v24_5_workload_resource_curves"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -155,6 +155,16 @@ V24_4_SCENARIO_DEFAULTS = {
     "meeting_load": 0.70,
     "admin_variability": 0.25,
     "planning_need_per_day": 2.20,
+    "workload_shape": "balanced_beta",
+    "workload_alpha": 2.4,
+    "workload_beta": 2.3,
+    "resource_shape": "under_resourced_peak",
+    "resource_alpha": 2.2,
+    "resource_beta": 2.2,
+    "min_active_crews": 2,
+    "max_active_crews": 8,
+    "peak_underresource_factor": 0.80,
+    "workload_pressure_sensitivity": 0.60,
 }
 
 
@@ -288,6 +298,8 @@ def cached_run_single(
     supervisor_capacity: float,
     initial_planning_quality: float,
     supervisor_base_workload: float,
+    max_active_crews: int,
+    peak_underresource_factor: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run one scenario multiple times and return timeseries + final runs."""
     scenarios = cached_load_scenarios(APP_DATA_VERSION)
@@ -307,6 +319,8 @@ def cached_run_single(
         supervisor_capacity=supervisor_capacity,
         initial_planning_quality=initial_planning_quality,
         supervisor_base_workload=supervisor_base_workload,
+        max_active_crews=max_active_crews,
+        peak_underresource_factor=peak_underresource_factor,
     )
 
     frames = []
@@ -368,6 +382,10 @@ FRIENDLY_METRIC_NAMES = {
     "avg_adoption": "Average adoption",
     "avg_effective_use": "Average effective DVM use",
     "supervisor_utilization": "Supervisor utilization",
+    "planned_workload_today": "Planned tasks due today",
+    "active_crews_today": "Active crews",
+    "available_crew_capacity_today": "Available crew capacity",
+    "workload_pressure": "Workload pressure",
     "supervisor_base_workload": "Supervisor base workload",
     "supervisor_total_workload": "Supervisor total workload",
     "supervisor_planning_shortfall": "Supervisor planning shortfall",
@@ -522,6 +540,10 @@ def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
         "supervisor_available_planning_capacity",
         "cumulative_base_workload",
         "cumulative_planning_shortfall",
+        "planned_workload_today",
+        "active_crews_today",
+        "available_crew_capacity_today",
+        "workload_pressure",
     ]
     for col in fallback_zero_cols:
         if col not in df.columns:
@@ -632,6 +654,25 @@ with st.sidebar:
         help="Worker-independent daily supervisor workload such as administration, reporting, orders, invoices, authority documentation and meetings.",
     )
 
+    st.divider()
+    st.markdown("**Project workload and resources**")
+    max_active_crews = st.slider(
+        "Maximum active crews",
+        3,
+        12,
+        int(getattr(active_scenario, "max_active_crews", 8)),
+        step=1,
+        help="Maximum number of crews available near the resource peak.",
+    )
+    peak_underresource_factor = st.slider(
+        "Peak resource fit",
+        0.40,
+        1.10,
+        float(getattr(active_scenario, "peak_underresource_factor", 0.80)),
+        step=0.01,
+        help="How closely resources follow peak workload. Lower values mean under-resourcing during the peak.",
+    )
+
     run_btn = st.button("▶ Run simulation", type="primary", use_container_width=True)
 
 
@@ -654,6 +695,8 @@ cache_key = (
     round(supervisor_capacity, 4),
     round(initial_planning_quality, 4),
     round(supervisor_base_workload, 4),
+    int(max_active_crews),
+    round(peak_underresource_factor, 4),
 )
 
 if "single_cache_key" not in st.session_state:
@@ -703,6 +746,8 @@ single_metadata = {
     "supervisor_capacity": supervisor_capacity,
     "initial_planning_quality": initial_planning_quality,
     "supervisor_base_workload": supervisor_base_workload,
+    "max_active_crews": max_active_crews,
+    "peak_underresource_factor": peak_underresource_factor,
     "created_at": datetime.now().isoformat(timespec="seconds"),
 }
 single_excel_bytes = build_single_excel(df_ts, df_final, single_metadata)
@@ -752,6 +797,39 @@ with tab_results:
     k6.metric("Firefighting ratio", f"{display_metric(df_final, 'firefighting_ratio'):.1%}")
 
     st.divider()
+
+    workload_agg = df_ts.groupby("day", observed=True)[
+        ["planned_workload_today", "active_crews_today", "workload_pressure"]
+    ].mean().reset_index()
+    fig_load = go.Figure()
+    fig_load.add_trace(
+        go.Bar(
+            x=workload_agg["day"],
+            y=workload_agg["planned_workload_today"],
+            name="Planned tasks due",
+            marker_color="#BA7517",
+            opacity=0.55,
+            yaxis="y",
+        )
+    )
+    fig_load.add_trace(
+        go.Scatter(
+            x=workload_agg["day"],
+            y=workload_agg["active_crews_today"],
+            name="Active crews",
+            mode="lines",
+            line=dict(color="#1D9E75", width=3),
+            yaxis="y2",
+        )
+    )
+    fig_load.update_layout(
+        title="Planned workload and active crew resources",
+        xaxis_title="Day",
+        yaxis=dict(title="Planned tasks due"),
+        yaxis2=dict(title="Active crews", overlaying="y", side="right"),
+        **PLOTLY_LAYOUT,
+    )
+    st.plotly_chart(fig_load, use_container_width=True)
 
     col_a, col_b = st.columns(2)
 
@@ -887,6 +965,7 @@ with tab_timeseries:
         "open_schedule_backlog",
         "cumulative_plan_failures",
         "project_delay_days",
+        "workload_pressure",
         "planning_quality",
         "trust_in_data",
         "trust_in_management",

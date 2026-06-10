@@ -66,7 +66,7 @@ SCENARIO_LABELS = {
     "analog_vm": "Analog VM",
     "management_dashboard": "Management Dashboard",
     "forced_reporting_dvm": "Forced Reporting DVM",
-    "workface_dvm": "Workface DVM",
+    "workface_dvm": "Ready Work Area DVM",
     "dvm_lean_autonomous": "DVM Lean Autonomous",
 }
 
@@ -83,11 +83,21 @@ PLOTLY_LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
     font=dict(family="sans-serif", size=12, color="#444"),
-    margin=dict(l=8, r=8, t=36, b=8),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    margin=dict(l=8, r=8, t=88, b=8),
+    title_x=0.0,
+    title_y=0.98,
+    title_xanchor="left",
+    title_yanchor="top",
+    title_pad=dict(t=2, b=22),
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.10,
+        xanchor="left",
+        x=0,
+        bgcolor="rgba(255,255,255,0.65)",
+    ),
 )
-
-APP_DATA_VERSION = "v24_1_weekly_ppc_backlog"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -177,7 +187,6 @@ def build_compare_excel(
 
 @st.cache_data(show_spinner=False)
 def cached_run_single(
-    app_data_version: str,
     scenario_name: str,
     runs: int,
     max_days: int,
@@ -257,23 +266,10 @@ def line_mean_by_day(
     color: str,
     y_title: str | None = None,
 ) -> go.Figure:
-    fig = go.Figure()
-    if df.empty or "day" not in df.columns or metric not in df.columns:
-        fig.update_layout(
-            title=title,
-            xaxis_title="Day",
-            yaxis_title=y_title or metric,
-            **PLOTLY_LAYOUT,
-        )
-        fig.add_annotation(
-            text=f"Metric not available in the current simulation data: {metric}",
-            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
-        )
-        return fig
-
     agg = df.groupby("day", observed=True)[metric].agg(["mean", "std"]).reset_index()
     agg["std"] = agg["std"].fillna(0)
 
+    fig = go.Figure()
     fig.add_trace(
         go.Scatter(
             x=pd.concat([agg["day"], agg["day"][::-1]]),
@@ -292,6 +288,7 @@ def line_mean_by_day(
             mode="lines",
             line=dict(color=color, width=2),
             name="Mean",
+            showlegend=False,
         )
     )
     fig.update_layout(
@@ -329,41 +326,6 @@ def minmax(series: pd.Series, invert: bool = False) -> pd.Series:
         out = (s - s.min()) / denom
     return 1 - out if invert else out
 
-
-
-def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Add safe fallback columns so old cached/partial simulation data does not crash the UI."""
-    if df is None or df.empty:
-        return df
-    df = df.copy()
-
-    if "avg_weekly_ppc" not in df.columns:
-        if "weekly_ppc" in df.columns:
-            df["avg_weekly_ppc"] = df["weekly_ppc"]
-        elif "ppc_proxy" in df.columns:
-            df["avg_weekly_ppc"] = df["ppc_proxy"]
-        else:
-            df["avg_weekly_ppc"] = 0.0
-
-    if "weekly_ppc" not in df.columns:
-        df["weekly_ppc"] = df["avg_weekly_ppc"]
-
-    fallback_zero_cols = [
-        "last_completed_weekly_ppc",
-        "planned_tasks_this_week",
-        "completed_on_plan_this_week",
-        "weekly_carryover",
-        "open_schedule_backlog",
-        "cumulative_plan_failures",
-        "project_delay_days",
-        "avg_lateness_days",
-        "late_completed_tasks",
-    ]
-    for col in fallback_zero_cols:
-        if col not in df.columns:
-            df[col] = 0.0
-
-    return df
 
 # ── Load scenarios ─────────────────────────────────────────────────────────────
 try:
@@ -463,7 +425,6 @@ with st.sidebar:
 
 # ── Session state and simulation run ───────────────────────────────────────────
 cache_key = (
-    APP_DATA_VERSION,
     selected_scenario_name,
     runs,
     max_days,
@@ -501,8 +462,6 @@ if st.session_state["single_result"] is None:
     st.stop()
 
 df_ts, df_final = st.session_state["single_result"]
-df_ts = ensure_v24_columns(df_ts)
-df_final = ensure_v24_columns(df_final)
 
 color = scenario_color(selected_scenario_name)
 label = scenario_label(selected_scenario_name)
@@ -666,7 +625,7 @@ with tab_results:
                     "alternative_task_switches": "Successful alternative task switches",
                     "total_idle_time_external": "External idle time, days",
                 },
-                title="Do alternative workfaces reduce external idle time?",
+                title="Do alternative ready work areas reduce external idle time?",
                 trendline="ols" if len(df_final) >= 3 else None,
             )
             fig_switch.update_layout(**PLOTLY_LAYOUT)
@@ -832,7 +791,7 @@ with tab_disruptions:
                 mode="gauge+number",
                 value=round(success_rate * 100, 1),
                 number={"suffix": "%"},
-                title={"text": "Alternative workface success rate"},
+                title={"text": "Alternative ready work area success rate"},
                 gauge={
                     "axis": {"range": [0, 100]},
                     "bar": {"color": color},

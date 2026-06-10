@@ -99,12 +99,15 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v24_4_supervisor_base_workload"
+APP_DATA_VERSION = "v24_4_1_scenario_cache_fix"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
-def cached_load_scenarios() -> list[Scenario]:
+def cached_load_scenarios(app_data_version: str = APP_DATA_VERSION) -> list[Scenario]:
+    # app_data_version is intentionally part of the cache key.
+    # It prevents Streamlit from reusing old cached Scenario objects after
+    # the Scenario dataclass has changed.
     return load_scenarios("config/scenarios.yaml")
 
 
@@ -142,6 +145,85 @@ def scenario_color(name: str) -> str:
 def scenario_label(name: str) -> str:
     name = str(name)
     return SCENARIO_LABELS.get(name, name)
+
+
+V24_4_SCENARIO_DEFAULTS = {
+    "supervisor_base_workload": 1.50,
+    "management_reporting_load": 0.65,
+    "procurement_admin_load": 0.55,
+    "authority_reporting_load": 0.35,
+    "meeting_load": 0.70,
+    "admin_variability": 0.25,
+    "planning_need_per_day": 2.20,
+}
+
+
+def ensure_scenario_v24_4_fields(scenario: Scenario) -> Scenario:
+    """Rebuild Scenario if an old cached object is missing v24.4 fields."""
+    missing = [field for field in V24_4_SCENARIO_DEFAULTS if not hasattr(scenario, field)]
+    if not missing:
+        return scenario
+
+    data = {}
+    for field in getattr(Scenario, "__dataclass_fields__", {}):
+        if hasattr(scenario, field):
+            data[field] = getattr(scenario, field)
+
+    scenario_name = data.get("name", getattr(scenario, "name", "unknown"))
+    scenario_defaults_by_name = {
+        "analog_vm": {
+            "supervisor_base_workload": 1.60,
+            "management_reporting_load": 0.65,
+            "procurement_admin_load": 0.65,
+            "authority_reporting_load": 0.35,
+            "meeting_load": 0.75,
+            "admin_variability": 0.30,
+            "planning_need_per_day": 2.20,
+        },
+        "management_dashboard": {
+            "supervisor_base_workload": 1.50,
+            "management_reporting_load": 0.90,
+            "procurement_admin_load": 0.55,
+            "authority_reporting_load": 0.35,
+            "meeting_load": 0.80,
+            "admin_variability": 0.28,
+            "planning_need_per_day": 2.25,
+        },
+        "forced_reporting_dvm": {
+            "supervisor_base_workload": 1.70,
+            "management_reporting_load": 1.25,
+            "procurement_admin_load": 0.65,
+            "authority_reporting_load": 0.40,
+            "meeting_load": 0.85,
+            "admin_variability": 0.35,
+            "planning_need_per_day": 2.30,
+        },
+        "workface_dvm": {
+            "supervisor_base_workload": 1.35,
+            "management_reporting_load": 0.60,
+            "procurement_admin_load": 0.48,
+            "authority_reporting_load": 0.30,
+            "meeting_load": 0.65,
+            "admin_variability": 0.24,
+            "planning_need_per_day": 2.20,
+        },
+        "dvm_lean_autonomous": {
+            "supervisor_base_workload": 1.20,
+            "management_reporting_load": 0.45,
+            "procurement_admin_load": 0.40,
+            "authority_reporting_load": 0.28,
+            "meeting_load": 0.55,
+            "admin_variability": 0.20,
+            "planning_need_per_day": 2.10,
+        },
+    }
+
+    defaults = dict(V24_4_SCENARIO_DEFAULTS)
+    defaults.update(scenario_defaults_by_name.get(str(scenario_name), {}))
+    for field in missing:
+        data[field] = defaults[field]
+
+    return Scenario(**data)
 
 
 def rgba_from_hex(hex_color: str, alpha: float = 0.15) -> str:
@@ -205,10 +287,12 @@ def cached_run_single(
     reporting_burden: float,
     supervisor_capacity: float,
     initial_planning_quality: float,
+    supervisor_base_workload: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run one scenario multiple times and return timeseries + final runs."""
-    scenarios = cached_load_scenarios()
+    scenarios = cached_load_scenarios(APP_DATA_VERSION)
     base_scenario = next(s for s in scenarios if s.name == scenario_name)
+    base_scenario = ensure_scenario_v24_4_fields(base_scenario)
 
     scenario = replace(
         base_scenario,
@@ -222,6 +306,7 @@ def cached_run_single(
         reporting_burden=reporting_burden,
         supervisor_capacity=supervisor_capacity,
         initial_planning_quality=initial_planning_quality,
+        supervisor_base_workload=supervisor_base_workload,
     )
 
     frames = []
@@ -249,7 +334,7 @@ def cached_run_all_scenarios(
     daily_shock_probability: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Run all scenarios with default parameters."""
-    scenarios = cached_load_scenarios()
+    scenarios = cached_load_scenarios(APP_DATA_VERSION)
     df_all_ts = run_scenario_comparison(
         scenarios=scenarios,
         runs=runs,
@@ -446,7 +531,7 @@ def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Load scenarios ─────────────────────────────────────────────────────────────
 try:
-    SCENARIOS = cached_load_scenarios()
+    SCENARIOS = cached_load_scenarios(APP_DATA_VERSION)
 except Exception as exc:
     st.error("Scenario configuration could not be loaded.")
     st.exception(exc)
@@ -488,7 +573,9 @@ with st.sidebar:
         key="selected_scenario_name",
     )
 
-    active_scenario = scenario_by_name.get(selected_scenario_name, SCENARIOS[0])
+    active_scenario = ensure_scenario_v24_4_fields(
+        scenario_by_name.get(selected_scenario_name, SCENARIOS[0])
+    )
 
     st.divider()
 
@@ -536,6 +623,14 @@ with st.sidebar:
         float(active_scenario.initial_planning_quality),
         step=0.01,
     )
+    supervisor_base_workload = st.slider(
+        "Supervisor base workload (h/day)",
+        0.0,
+        7.0,
+        float(getattr(active_scenario, "supervisor_base_workload", 1.5)),
+        step=0.1,
+        help="Worker-independent daily supervisor workload such as administration, reporting, orders, invoices, authority documentation and meetings.",
+    )
 
     run_btn = st.button("▶ Run simulation", type="primary", use_container_width=True)
 
@@ -558,6 +653,7 @@ cache_key = (
     round(reporting_burden, 4),
     round(supervisor_capacity, 4),
     round(initial_planning_quality, 4),
+    round(supervisor_base_workload, 4),
 )
 
 if "single_cache_key" not in st.session_state:
@@ -606,6 +702,7 @@ single_metadata = {
     "reporting_burden": reporting_burden,
     "supervisor_capacity": supervisor_capacity,
     "initial_planning_quality": initial_planning_quality,
+    "supervisor_base_workload": supervisor_base_workload,
     "created_at": datetime.now().isoformat(timespec="seconds"),
 }
 single_excel_bytes = build_single_excel(df_ts, df_final, single_metadata)

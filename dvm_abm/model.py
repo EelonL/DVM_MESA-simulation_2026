@@ -21,6 +21,18 @@ class AgentSA:
     @property
     def total(self): return .4*self.perception+.35*self.comprehension+.25*self.projection
 
+LPS_CONSTRAINTS = [
+    "design_ready",
+    "material_ready",
+    "crew_ready",
+    "equipment_ready",
+    "space_ready",
+    "predecessor_ready",
+    "approval_ready",
+    "safety_quality_ready",
+]
+
+
 class DVMConstructionModel(Model):
     def __init__(self, scenario: Scenario|None=None, seed:int=20260609, max_days:int=100, number_of_tasks:int=72, daily_shock_probability:float=.32):
         try: super().__init__(seed=seed)
@@ -30,6 +42,9 @@ class DVMConstructionModel(Model):
         self.useful_dvm_events=0; self.harmful_events=0; self.external_disruptions=0; self.external_disruptions_by_type={}; self.recovery_times=[]; self.blockage_resolution_times=[]
         self.total_recovery_time=0.0; self.alternative_task_switches=0; self.failed_task_switches=0; self.supervisor_recovery_interventions=0; self.idle_time_due_to_external_disruptions=0.0
         self.daily_questions=0; self.daily_escalations=0; self.daily_coordination_needs=0; self.daily_recovery_interventions=0; self.daily_external_pressure=0; self.daily_useful=0; self.daily_harmful=0
+        self.daily_making_do_starts=0; self.daily_making_do_interruptions=0; self.daily_rework_due_to_making_do=0.0
+        self.weekly_commitments={}; self.current_committed_task_ids=set()
+        self.commitment_history={}
         self.week_length=5; self.current_picture=SituationPicture(0,0,0,0,0,0,0); self.trades=["drywall","mep","finishes","carpentry"]
         self.shock_schedule=generate_external_shock_schedule(seed,self.trades,max_days+40,daily_shock_probability)
         self.planned_workload_by_day=[0 for _ in range(max_days+1)]
@@ -145,8 +160,22 @@ class DVMConstructionModel(Model):
             "active_crews_today": lambda m: m.active_crews_today,
             "available_crew_capacity_today": lambda m: m.available_crew_capacity_today,
             "workload_pressure": lambda m: m.workload_pressure,
+            "baseline_due_tasks_this_week": lambda m: m.planned_tasks_this_week,
+            "weekly_committed_tasks": lambda m: m.weekly_committed_tasks,
+            "completed_committed_tasks": lambda m: m.completed_committed_tasks,
             "planned_tasks_this_week": lambda m: m.planned_tasks_this_week,
             "completed_on_plan_this_week": lambda m: m.completed_on_plan_this_week,
+            "baseline_adherence": lambda m: m.baseline_adherence,
+            "avg_make_ready_score": lambda m: m.avg_make_ready_score,
+            "sound_commitment_share": lambda m: m.sound_commitment_share,
+            "constraints_ready_count": lambda m: m.constraints_ready_count,
+            "constraints_missing_count": lambda m: m.constraints_missing_count,
+            "making_do_starts": "daily_making_do_starts",
+            "cumulative_making_do_starts": lambda m: sum(t.making_do_started for t in m.tasks),
+            "making_do_interruptions": "daily_making_do_interruptions",
+            "cumulative_making_do_interruptions": lambda m: sum(t.making_do_interruptions for t in m.tasks),
+            "rework_due_to_making_do": "daily_rework_due_to_making_do",
+            "cumulative_rework_due_to_making_do": lambda m: sum(t.rework_due_to_making_do for t in m.tasks),
             "weekly_ppc": lambda m: m.weekly_ppc,
             "avg_weekly_ppc": lambda m: m.avg_weekly_ppc,
             "last_completed_weekly_ppc": lambda m: m.last_completed_weekly_ppc,
@@ -244,26 +273,52 @@ class DVMConstructionModel(Model):
         start, end = self._week_bounds(week)
         return [t for t in self.tasks if start <= self._planned_finish(t) <= end]
 
-    def _completed_on_plan_in_week(self, week):
+    def _committed_in_week(self, week):
+        ids=self.weekly_commitments.get(int(week), set())
+        return [t for t in self.tasks if t.id in ids]
+
+    def _completed_committed_in_week(self, week):
         _, end = self._week_bounds(week)
         return [
-            t for t in self._planned_in_week(week)
+            t for t in self._committed_in_week(week)
             if t.actual_finish is not None and t.actual_finish <= end
         ]
 
+    def _completed_on_plan_in_week(self, week):
+        # Backwards-compatible alias: in v24.6 PPC is based on weekly commitments.
+        return self._completed_committed_in_week(week)
+
     def _weekly_ppc_value(self, week):
-        planned = self._planned_in_week(week)
-        if not planned:
+        committed = self._committed_in_week(week)
+        if not committed:
             return 0.0
-        return len(self._completed_on_plan_in_week(week)) / len(planned)
+        return len(self._completed_committed_in_week(week)) / len(committed)
 
     @property
     def planned_tasks_this_week(self):
+        # Baseline due tasks, not LPS commitments.
         return len(self._planned_in_week(self.current_week))
 
     @property
+    def weekly_committed_tasks(self):
+        return len(self._committed_in_week(self.current_week))
+
+    @property
+    def completed_committed_tasks(self):
+        return len(self._completed_committed_in_week(self.current_week))
+
+    @property
     def completed_on_plan_this_week(self):
-        return len(self._completed_on_plan_in_week(self.current_week))
+        return self.completed_committed_tasks
+
+    @property
+    def baseline_adherence(self):
+        planned = self._planned_in_week(self.current_week)
+        if not planned:
+            return 0.0
+        _, end = self._week_bounds(self.current_week)
+        done = [t for t in planned if t.actual_finish is not None and t.actual_finish <= end]
+        return len(done) / len(planned)
 
     @property
     def weekly_ppc(self):
@@ -272,7 +327,7 @@ class DVMConstructionModel(Model):
     @property
     def last_completed_weekly_ppc(self):
         completed_weeks = [w for w in range(1, self.current_week + 1) if self.day >= self._week_bounds(w)[1]]
-        completed_weeks = [w for w in completed_weeks if self._planned_in_week(w)]
+        completed_weeks = [w for w in completed_weeks if self._committed_in_week(w)]
         if not completed_weeks:
             return self.weekly_ppc
         return self._weekly_ppc_value(max(completed_weeks))
@@ -280,35 +335,54 @@ class DVMConstructionModel(Model):
     @property
     def avg_weekly_ppc(self):
         completed_weeks = [w for w in range(1, self.current_week + 1) if self.day >= self._week_bounds(w)[1]]
-        values = [self._weekly_ppc_value(w) for w in completed_weeks if self._planned_in_week(w)]
+        values = [self._weekly_ppc_value(w) for w in completed_weeks if self._committed_in_week(w)]
         if not values:
             return self.weekly_ppc
         return safe_mean(values)
 
     @property
+    def sound_commitment_share(self):
+        committed=self._committed_in_week(self.current_week)
+        if not committed:
+            return 0.0
+        return sum(t.commitment_sound for t in committed) / len(committed)
+
+    @property
+    def avg_make_ready_score(self):
+        open_tasks=[t for t in self.tasks if not t.is_done]
+        if not open_tasks:
+            return 1.0
+        return safe_mean([t.make_ready_score for t in open_tasks])
+
+    @property
+    def constraints_ready_count(self):
+        return sum(sum(1 for v in t.constraints.values() if v) for t in self.tasks if not t.is_done)
+
+    @property
+    def constraints_missing_count(self):
+        return sum(sum(1 for v in t.constraints.values() if not v) for t in self.tasks if not t.is_done)
+
+    @property
     def weekly_carryover(self):
-        # Open tasks from the current planned week after the week has ended.
         _, end = self._week_bounds(self.current_week)
         if self.day < end:
             return 0
-        return max(0, self.planned_tasks_this_week - self.completed_on_plan_this_week)
+        return max(0, self.weekly_committed_tasks - self.completed_committed_tasks)
 
     @property
     def open_schedule_backlog(self):
-        # Planned to be finished before today, but still not complete.
         return sum((not t.is_done) and self._planned_finish(t) < self.day for t in self.tasks)
 
     @property
     def cumulative_plan_failures(self):
-        # Count all weekly commitments that have already failed. Late completion
-        # does not erase the historical PPC failure.
+        # Count failed weekly commitments. Late completion does not erase PPC failure.
         failures = 0
-        for t in self.tasks:
-            planned_week = self._week_for_day(self._planned_finish(t))
-            _, week_end = self._week_bounds(planned_week)
+        for week, ids in self.weekly_commitments.items():
+            _, week_end = self._week_bounds(week)
             if self.day >= week_end:
-                if t.actual_finish is None or t.actual_finish > week_end:
-                    failures += 1
+                for t in self.tasks:
+                    if t.id in ids and (t.actual_finish is None or t.actual_finish > week_end):
+                        failures += 1
         return failures
 
     @property
@@ -342,14 +416,16 @@ class DVMConstructionModel(Model):
 
     @property
     def ppc_proxy(self):
-        # Backwards-compatible alias. In v2.4 this now means average weekly PPC
-        # over completed weeks, not final cumulative completion.
         return self.avg_weekly_ppc
 
     def step(self):
         self.daily_questions=self.daily_escalations=self.daily_coordination_needs=self.daily_recovery_interventions=0; self.daily_external_pressure=0; self.daily_useful=0; self.daily_harmful=0
+        self.daily_making_do_starts=0; self.daily_making_do_interruptions=0; self.daily_rework_due_to_making_do=0.0
         self._update_daily_load_state()
-        self._update_blockages(); self.current_picture=self._picture(); self._update_readiness()
+        self._update_blockages(); self.current_picture=self._picture(); self._update_constraints()
+        if self.day % self.week_length == 0:
+            self._make_weekly_commitments()
+        self._update_readiness()
         for c in list(self.crews[:self.active_crews_today]): c.step()
         self.daily_coordination_needs += self._baseline_coordination_needs()
         self.supervisor.process_day(self.daily_questions,self.daily_escalations,self.daily_coordination_needs,self.daily_recovery_interventions,self.daily_external_pressure)
@@ -373,6 +449,7 @@ class DVMConstructionModel(Model):
             + 0.85 * s.decision_centralization
             + 0.65 * backlog_pressure
             + getattr(s,"workload_pressure_sensitivity",.6)*self.workload_pressure
+            + .40*s.making_do_tendency*(1-self.avg_make_ready_score)
             - 0.55 * s.autonomy_level
             - 0.35 * self.planning_quality,
         )
@@ -386,44 +463,153 @@ class DVMConstructionModel(Model):
             if t.external_blockage_active:
                 t.external_blockage_remaining-=1
                 if t.external_blockage_remaining<=0: t.external_blockage_active=False; t.status=TaskStatus.READY; self.blockage_resolution_times.append(self.day-(t.external_blockage_started or self.day))
-    def _update_readiness(self):
+    def _update_constraints(self):
+        """Update LPS prerequisites for each task."""
         s=self.dvm_scenario; r=self.py_random
         done={t.id for t in self.tasks if t.is_done}
+        visibility=clamp(.35*s.constraint_screening_strength+.25*self.current_picture.readiness_quality+.20*self.current_picture.workface_quality+.20*self.planning_quality)
         for t in self.tasks:
-            if t.is_done or t.external_blockage_active: continue
-            backlog_pressure = clamp(self.open_schedule_backlog / max(len(self.tasks), 1))
-            supervisor_pressure = clamp(self.supervisor.backlog / max(self.supervisor.capacity_per_day, 0.01))
-            prob=clamp(
-                s.initial_plan_reliability
-                + .12*s.integration_level
-                + .20*self.current_picture.workface_quality
-                + .18*self.current_picture.readiness_quality
-                + .22*self.planning_quality
-                - .18*backlog_pressure
-                - .10*supervisor_pressure
-                - .10*getattr(s,"workload_pressure_sensitivity",.6)*self.workload_pressure
-                - .12*s.reporting_burden*(1-self.trust_in_management),
-                .04,.98
-            )
-            if self.day<t.planned_start: prob*=.35
-            if not t.material_ready and r.random()<prob: t.material_ready=True
-            if not t.location_ready and r.random()<prob: t.location_ready=True
-            if t.material_ready and t.location_ready and all(p in done for p in t.predecessor_ids) and t.status==TaskStatus.NOT_READY: t.status=TaskStatus.READY
+            if t.is_done:
+                t.make_ready_score=1.0
+                continue
+            # predecessor is deterministic; other constraints are progressively made ready.
+            t.constraints["predecessor_ready"]=all(p in done for p in t.predecessor_ids)
+            if self.day < t.planned_start-10:
+                early_factor=.25
+            elif self.day < t.planned_start:
+                early_factor=.65
+            else:
+                early_factor=1.0
+            base=clamp(
+                .08
+                + .36*s.initial_plan_reliability
+                + .22*visibility
+                + .18*self.planning_quality
+                + .14*s.constraint_improvement_rate
+                - .08*self.workload_pressure
+                - .06*clamp(self.supervisor.backlog/max(self.supervisor.capacity_per_day,.01)),
+                .02,.96
+            )*early_factor
+            probs={
+                "design_ready": base*(.80+.35*s.readiness_visibility),
+                "material_ready": base*(.75+.45*s.material_visibility),
+                "crew_ready": clamp(.55+.10*self.active_crews_today-.08*self.workload_pressure),
+                "equipment_ready": base*(.72+.25*s.integration_level),
+                "space_ready": base*(.70+.40*s.congestion_visibility),
+                "approval_ready": base*(.68+.18*s.management_access),
+                "safety_quality_ready": base*(.78+.22*s.visual_clarity),
+            }
+            for key, prob in probs.items():
+                if not t.constraints[key] and r.random()<clamp(prob):
+                    t.constraints[key]=True
+            t.material_ready=t.constraints["material_ready"]
+            t.location_ready=t.constraints["space_ready"]
+            t.make_ready_score=sum(1 for v in t.constraints.values() if v)/len(t.constraints)
+
+    def _is_sound_task(self,t):
+        return t.make_ready_score >= self.dvm_scenario.make_ready_threshold and t.constraints.get("predecessor_ready",False)
+
+    def _make_weekly_commitments(self):
+        """Create LPS weekly commitments from sound tasks and a limited number of risky tasks."""
+        s=self.dvm_scenario; r=self.py_random
+        week=self.current_week
+        start,end=self._week_bounds(week)
+        due_window_end=end+max(0,int(2+self.workload_pressure*3))
+        candidates=[
+            t for t in self.tasks
+            if not t.is_done and not t.external_blockage_active
+            and t.status in (TaskStatus.NOT_READY, TaskStatus.READY, TaskStatus.INTERRUPTED)
+            and t.planned_start <= due_window_end
+        ]
+        for t in self.tasks:
+            if t.committed_week==week:
+                t.committed_week=None; t.commitment_day=None; t.commitment_sound=False
+        self.current_committed_task_ids=set()
+        if not candidates:
+            self.weekly_commitments[week]=set()
+            return
+        weekly_capacity=max(1,int(self.active_crews_today*self.week_length*s.commitment_capacity_factor))
+        # More realistic scenarios commit fewer, better tasks. Poor scenarios overcommit.
+        target=max(1,int(weekly_capacity*(.72+.45*s.overcommitment_tendency-.18*s.commitment_realism)))
+        target=min(target,len(candidates))
+        candidates.sort(key=lambda t: (
+            1 if self._is_sound_task(t) else 0,
+            t.make_ready_score,
+            -abs(t.planned_start-self.day),
+            t.priority
+        ), reverse=True)
+        committed=[]
+        for t in candidates:
+            sound=self._is_sound_task(t)
+            risky_commit_prob=clamp((1-s.constraint_screening_strength)*s.overcommitment_tendency*(1+.7*self.workload_pressure))
+            if sound or r.random()<risky_commit_prob:
+                t.committed_week=week
+                t.commitment_day=self.day
+                t.commitment_sound=sound
+                committed.append(t)
+            if len(committed)>=target:
+                break
+        ids={t.id for t in committed}
+        self.current_committed_task_ids=ids
+        self.weekly_commitments[week]=ids
+        self.commitment_history[week]={
+            "committed": len(committed),
+            "sound": sum(t.commitment_sound for t in committed),
+        }
+
+    def _update_readiness(self):
+        done={t.id for t in self.tasks if t.is_done}
+        for t in self.tasks:
+            if t.is_done or t.external_blockage_active:
+                continue
+            sound=self._is_sound_task(t)
+            # READY means sound enough for normal execution.
+            if sound and t.status==TaskStatus.NOT_READY:
+                t.status=TaskStatus.READY
+            # Risky commitments may also become visible to crews, but are not truly sound.
+            if t.committed_week==self.current_week and t.status==TaskStatus.NOT_READY:
+                t.status=TaskStatus.READY
+            # If predecessors fail, keep task from normal sound execution.
+            if not all(p in done for p in t.predecessor_ids) and not t.making_do_active and t.status==TaskStatus.READY:
+                t.status=TaskStatus.NOT_READY
+
     def step_crew(self,c):
         sa=self._sa(c); c.last_sa=sa.total; cur=self._task(c.current_task_id)
         if self.py_random.random()<self._question_prob(cur,sa): self.daily_questions+=1; c.questions_asked+=1
         if cur and cur.status==TaskStatus.IN_PROGRESS and not cur.external_blockage_active:
             shock=self._pop_shock(c.trade)
             if shock: self._external(cur,c,sa,shock); return
+            making_do_risk=0.0
+            if cur.making_do_active:
+                making_do_risk=self.dvm_scenario.making_do_interruption_rate*(1-cur.make_ready_score)*(1+.5*self.workload_pressure)
+            if self.py_random.random()<making_do_risk:
+                cur.interruptions+=1; cur.making_do_interruptions+=1; self.daily_making_do_interruptions+=1; c.escalations+=1; self.daily_escalations+=1; c.idle_time+=1; self.daily_coordination_needs+=1
+                rework=self.dvm_scenario.making_do_rework_factor*(1-cur.make_ready_score)
+                cur.remaining_duration+=rework; cur.rework_due_to_making_do+=rework; self.daily_rework_due_to_making_do+=rework
+                return
             if self.py_random.random()<self.dvm_scenario.disturbance_probability*(1-.4*self.planning_quality): cur.interruptions+=1; c.escalations+=1; self.daily_escalations+=1; c.idle_time+=1
             backlog_penalty=clamp_range(1.0-.018*self.open_schedule_backlog-.025*self.supervisor.backlog-.12*self.workload_pressure,.50,1.0)
+            making_do_penalty=clamp_range(1.0-.45*cur.making_do_active*(1-cur.make_ready_score),.45,1.0)
             progress_factor=clamp_range(.72+.24*sa.comprehension+.20*self.planning_quality+.08*self.current_picture.readiness_quality-.10*self.dvm_scenario.reporting_burden,.45,1.35)
-            cur.remaining_duration-=c.productivity*progress_factor*backlog_penalty; c.working_time+=1
-            if cur.remaining_duration<=0: cur.status=TaskStatus.COMPLETED; cur.actual_finish=self.day; c.current_task_id=None
+            cur.remaining_duration-=c.productivity*progress_factor*backlog_penalty*making_do_penalty; c.working_time+=1
+            if cur.remaining_duration<=0: cur.status=TaskStatus.COMPLETED; cur.actual_finish=self.day; cur.making_do_active=False; c.current_task_id=None
         else:
             task=self._choose_task(c)
             if task is None: c.idle_time+=1; return
             if c.location!=task.location: c.movements+=abs(c.location-task.location); c.location=task.location
+            if not self._is_sound_task(task):
+                md_prob=clamp(self.dvm_scenario.making_do_tendency*(1-task.make_ready_score)*(1+.6*self.workload_pressure)*(1+.4*self.dvm_scenario.decision_centralization))
+                if self.py_random.random()<md_prob:
+                    task.making_do_active=True
+                    if not task.making_do_started:
+                        task.making_do_started=True
+                        self.daily_making_do_starts+=1
+                    self.daily_harmful+=1
+                    self.daily_coordination_needs+=1
+                else:
+                    c.idle_time+=1
+                    self.daily_questions+=1
+                    return
             c.current_task_id=task.id; task.status=TaskStatus.IN_PROGRESS; task.actual_start=self.day if task.actual_start is None else task.actual_start
     def _sa(self,c):
         s=self.dvm_scenario; r=self.py_random; p=clamp(.1+.42*self.current_picture.workface_quality*c.effective_use()+.22*(.45*s.crew_access+.25*s.visual_clarity+.2*s.task_relevance+.1*c.dvm_skill)+.13*self.trust_in_data+.1*self.planning_quality+r.normalvariate(0,.04)); comp=clamp(.08+.36*p+.18*c.experience+.16*s.task_relevance+.12*self.trust_in_management+.14*self.planning_quality+r.normalvariate(0,.035)); proj=clamp(.05+.34*comp+.22*self.current_picture.recommendation_quality*c.effective_use()+.16*s.autonomy_level+.13*c.experience+.16*self.planning_quality+r.normalvariate(0,.035)); return AgentSA(p,comp,proj)
@@ -445,7 +631,16 @@ class DVMConstructionModel(Model):
     def _task(self,i): return next((t for t in self.tasks if t.id==i),None) if i is not None else None
     def _choose_task(self,c):
         cand=[t for t in self.tasks if t.trade==c.trade and t.status==TaskStatus.READY and not t.external_blockage_active and not t.is_done]
-        return max(cand,key=lambda t:t.priority+.18*self.planning_quality+.04*max(0,self.day-self._planned_finish(t))-.05*abs(t.location-c.location)) if cand else None
+        if not cand:
+            return None
+        return max(cand,key=lambda t:
+            (1.1 if t.id in self.current_committed_task_ids else 0)
+            + (0.45 if self._is_sound_task(t) else 0)
+            + t.priority
+            + .18*self.planning_quality
+            + .04*max(0,self.day-self._planned_finish(t))
+            - .05*abs(t.location-c.location)
+        )
     def _pop_shock(self,trade):
         for sh in self.shock_schedule.get(self.day,[]):
             if not sh.consumed and sh.trade==trade: sh.consumed=True; return sh

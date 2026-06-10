@@ -68,6 +68,31 @@ class TaskAgent(MesaCompatAgent):
         self.location_ready = False
         self.improved_by_planning = False
 
+        # LPS / make-ready constraints.
+        self.constraints = {
+            "design_ready": False,
+            "material_ready": False,
+            "crew_ready": False,
+            "equipment_ready": False,
+            "space_ready": False,
+            "predecessor_ready": False,
+            "approval_ready": False,
+            "safety_quality_ready": False,
+        }
+        self.make_ready_score = 0.0
+
+        # Weekly commitment and PPC tracking.
+        self.committed_week = None
+        self.commitment_day = None
+        self.commitment_sound = False
+        self.commitment_failed = False
+
+        # Making-do tracking: starting work without all prerequisites.
+        self.making_do_active = False
+        self.making_do_started = False
+        self.making_do_interruptions = 0
+        self.rework_due_to_making_do = 0.0
+
         self.external_blockage_active = False
         self.external_blockage_type = None
         self.external_blockage_started = None

@@ -80,6 +80,17 @@ class Scenario:
     peak_underresource_factor: float
     workload_pressure_sensitivity: float
 
+    # LPS make-ready, weekly commitments and making-do.
+    constraint_screening_strength: float
+    make_ready_threshold: float
+    commitment_realism: float
+    overcommitment_tendency: float
+    making_do_tendency: float
+    making_do_interruption_rate: float
+    making_do_rework_factor: float
+    constraint_improvement_rate: float
+    commitment_capacity_factor: float
+
     # External variability parameters.
     # In the v2.3 model, the base shock schedule is controlled per run.
     # These fields are still retained for compatibility and future experiments.

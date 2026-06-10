@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v24_6_lps_commitments_making_do"
+APP_DATA_VERSION = "v24_6_1_lps_scenario_cache_fix"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -198,6 +198,15 @@ def ensure_scenario_v24_4_fields(scenario: Scenario) -> Scenario:
             "meeting_load": 0.75,
             "admin_variability": 0.30,
             "planning_need_per_day": 2.20,
+            "constraint_screening_strength": 0.35,
+            "make_ready_threshold": 0.72,
+            "commitment_realism": 0.55,
+            "overcommitment_tendency": 0.45,
+            "making_do_tendency": 0.45,
+            "making_do_interruption_rate": 0.30,
+            "making_do_rework_factor": 0.35,
+            "constraint_improvement_rate": 0.07,
+            "commitment_capacity_factor": 1.05,
         },
         "management_dashboard": {
             "supervisor_base_workload": 1.50,
@@ -207,6 +216,15 @@ def ensure_scenario_v24_4_fields(scenario: Scenario) -> Scenario:
             "meeting_load": 0.80,
             "admin_variability": 0.28,
             "planning_need_per_day": 2.25,
+            "constraint_screening_strength": 0.55,
+            "make_ready_threshold": 0.74,
+            "commitment_realism": 0.62,
+            "overcommitment_tendency": 0.35,
+            "making_do_tendency": 0.32,
+            "making_do_interruption_rate": 0.24,
+            "making_do_rework_factor": 0.28,
+            "constraint_improvement_rate": 0.09,
+            "commitment_capacity_factor": 1.00,
         },
         "forced_reporting_dvm": {
             "supervisor_base_workload": 1.70,
@@ -216,6 +234,15 @@ def ensure_scenario_v24_4_fields(scenario: Scenario) -> Scenario:
             "meeting_load": 0.85,
             "admin_variability": 0.35,
             "planning_need_per_day": 2.30,
+            "constraint_screening_strength": 0.45,
+            "make_ready_threshold": 0.75,
+            "commitment_realism": 0.50,
+            "overcommitment_tendency": 0.55,
+            "making_do_tendency": 0.50,
+            "making_do_interruption_rate": 0.34,
+            "making_do_rework_factor": 0.40,
+            "constraint_improvement_rate": 0.06,
+            "commitment_capacity_factor": 1.10,
         },
         "workface_dvm": {
             "supervisor_base_workload": 1.35,
@@ -234,6 +261,15 @@ def ensure_scenario_v24_4_fields(scenario: Scenario) -> Scenario:
             "meeting_load": 0.55,
             "admin_variability": 0.20,
             "planning_need_per_day": 2.10,
+            "constraint_screening_strength": 0.88,
+            "make_ready_threshold": 0.68,
+            "commitment_realism": 0.86,
+            "overcommitment_tendency": 0.12,
+            "making_do_tendency": 0.10,
+            "making_do_interruption_rate": 0.12,
+            "making_do_rework_factor": 0.12,
+            "constraint_improvement_rate": 0.15,
+            "commitment_capacity_factor": 0.88,
         },
     }
 
@@ -351,13 +387,15 @@ def cached_run_single(
 
 @st.cache_data(show_spinner=False)
 def cached_run_all_scenarios(
+    app_data_version: str,
     runs: int,
     max_days: int,
     base_seed: int,
     daily_shock_probability: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Run all scenarios with default parameters."""
-    scenarios = cached_load_scenarios(APP_DATA_VERSION)
+    scenarios = cached_load_scenarios(app_data_version)
+    scenarios = [ensure_scenario_v24_4_fields(s) for s in scenarios]
     df_all_ts = run_scenario_comparison(
         scenarios=scenarios,
         runs=runs,
@@ -585,7 +623,7 @@ def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Load scenarios ─────────────────────────────────────────────────────────────
 try:
-    SCENARIOS = cached_load_scenarios(APP_DATA_VERSION)
+    SCENARIOS = [ensure_scenario_v24_4_fields(s) for s in cached_load_scenarios(APP_DATA_VERSION)]
 except Exception as exc:
     st.error("Scenario configuration could not be loaded.")
     st.exception(exc)
@@ -1352,6 +1390,7 @@ with tab_compare:
         try:
             with st.spinner("Running all scenarios…"):
                 df_all_ts, df_all_final, df_summary = cached_run_all_scenarios(
+                    APP_DATA_VERSION,
                     runs=runs,
                     max_days=max_days,
                     base_seed=int(base_seed),

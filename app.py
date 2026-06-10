@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v24_5_workload_resource_curves"
+APP_DATA_VERSION = "v24_6_lps_commitments_making_do"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -165,6 +165,15 @@ V24_4_SCENARIO_DEFAULTS = {
     "max_active_crews": 8,
     "peak_underresource_factor": 0.80,
     "workload_pressure_sensitivity": 0.60,
+    "constraint_screening_strength": 0.60,
+    "make_ready_threshold": 0.72,
+    "commitment_realism": 0.65,
+    "overcommitment_tendency": 0.30,
+    "making_do_tendency": 0.25,
+    "making_do_interruption_rate": 0.22,
+    "making_do_rework_factor": 0.25,
+    "constraint_improvement_rate": 0.10,
+    "commitment_capacity_factor": 1.0,
 }
 
 
@@ -386,6 +395,16 @@ FRIENDLY_METRIC_NAMES = {
     "active_crews_today": "Active crews",
     "available_crew_capacity_today": "Available crew capacity",
     "workload_pressure": "Workload pressure",
+    "baseline_adherence": "Baseline adherence",
+    "weekly_committed_tasks": "Weekly committed tasks",
+    "completed_committed_tasks": "Completed committed tasks",
+    "avg_make_ready_score": "Average make-ready score",
+    "sound_commitment_share": "Sound commitment share",
+    "constraints_ready_count": "Constraints ready",
+    "constraints_missing_count": "Constraints missing",
+    "cumulative_making_do_starts": "Cumulative making-do starts",
+    "cumulative_making_do_interruptions": "Cumulative making-do interruptions",
+    "cumulative_rework_due_to_making_do": "Cumulative rework due to making-do",
     "supervisor_base_workload": "Supervisor base workload",
     "supervisor_total_workload": "Supervisor total workload",
     "supervisor_planning_shortfall": "Supervisor planning shortfall",
@@ -544,6 +563,19 @@ def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
         "active_crews_today",
         "available_crew_capacity_today",
         "workload_pressure",
+        "baseline_adherence",
+        "weekly_committed_tasks",
+        "completed_committed_tasks",
+        "avg_make_ready_score",
+        "sound_commitment_share",
+        "constraints_ready_count",
+        "constraints_missing_count",
+        "making_do_starts",
+        "cumulative_making_do_starts",
+        "making_do_interruptions",
+        "cumulative_making_do_interruptions",
+        "rework_due_to_making_do",
+        "cumulative_rework_due_to_making_do",
     ]
     for col in fallback_zero_cols:
         if col not in df.columns:
@@ -791,10 +823,10 @@ with tab_results:
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     k1.metric("Final day", f"{display_metric(df_final, 'day'):.0f}")
     k2.metric("Average weekly PPC", display_percent(df_final, "avg_weekly_ppc"))
-    k3.metric("Open backlog", f"{display_metric(df_final, 'open_schedule_backlog'):.1f} tasks")
-    k4.metric("Project delay", f"{display_metric(df_final, 'project_delay_days'):.1f} d")
-    k5.metric("Average recovery time", f"{display_metric(df_final, 'avg_recovery_time'):.2f} d")
-    k6.metric("Firefighting ratio", f"{display_metric(df_final, 'firefighting_ratio'):.1%}")
+    k3.metric("Make-ready score", display_percent(df_final, "avg_make_ready_score"))
+    k4.metric("Making-do starts", f"{display_metric(df_final, 'cumulative_making_do_starts'):.1f}")
+    k5.metric("Open backlog", f"{display_metric(df_final, 'open_schedule_backlog'):.1f} tasks")
+    k6.metric("Project delay", f"{display_metric(df_final, 'project_delay_days'):.1f} d")
 
     st.divider()
 
@@ -830,6 +862,30 @@ with tab_results:
         **PLOTLY_LAYOUT,
     )
     st.plotly_chart(fig_load, use_container_width=True)
+
+    lps_agg = df_ts.groupby("day", observed=True)[
+        ["avg_weekly_ppc", "baseline_adherence", "avg_make_ready_score", "sound_commitment_share"]
+    ].mean().reset_index()
+    fig_lps = go.Figure()
+    for metric, name, colour in [
+        ("avg_weekly_ppc", "PPC from weekly commitments", "#1D9E75"),
+        ("baseline_adherence", "Baseline adherence", "#888780"),
+        ("avg_make_ready_score", "Make-ready score", "#378ADD"),
+        ("sound_commitment_share", "Sound commitment share", "#BA7517"),
+    ]:
+        if metric in lps_agg.columns:
+            fig_lps.add_trace(go.Scatter(
+                x=lps_agg["day"], y=lps_agg[metric],
+                name=name, mode="lines", line=dict(color=colour, width=2)
+            ))
+    fig_lps.update_layout(
+        title="LPS make-ready and commitment reliability",
+        xaxis_title="Day",
+        yaxis_title="Share",
+        **PLOTLY_LAYOUT,
+    )
+    fig_lps.update_yaxes(range=[0,1], tickformat=".0%")
+    st.plotly_chart(fig_lps, use_container_width=True)
 
     col_a, col_b = st.columns(2)
 
@@ -951,6 +1007,17 @@ with tab_results:
         )
         st.plotly_chart(fig_delay, use_container_width=True)
 
+    st.markdown("#### Making-do effects")
+    md_cols = ["cumulative_making_do_starts", "cumulative_making_do_interruptions", "cumulative_rework_due_to_making_do"]
+    if all(col in df_ts.columns for col in md_cols):
+        md_agg = df_ts.groupby("day", observed=True)[md_cols].mean().reset_index()
+        fig_md = go.Figure()
+        fig_md.add_trace(go.Scatter(x=md_agg["day"], y=md_agg["cumulative_making_do_starts"], name="Making-do starts", mode="lines", line=dict(color="#D85A30", width=2)))
+        fig_md.add_trace(go.Scatter(x=md_agg["day"], y=md_agg["cumulative_making_do_interruptions"], name="Making-do interruptions", mode="lines", line=dict(color="#BA7517", width=2)))
+        fig_md.add_trace(go.Scatter(x=md_agg["day"], y=md_agg["cumulative_rework_due_to_making_do"], name="Rework due to making-do", mode="lines", line=dict(color="#888780", width=2)))
+        fig_md.update_layout(title="Making-do consequences over time", xaxis_title="Day", yaxis_title="Count / days", **PLOTLY_LAYOUT)
+        st.plotly_chart(fig_md, use_container_width=True)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — Time series
@@ -966,6 +1033,12 @@ with tab_timeseries:
         "cumulative_plan_failures",
         "project_delay_days",
         "workload_pressure",
+        "baseline_adherence",
+        "avg_make_ready_score",
+        "sound_commitment_share",
+        "cumulative_making_do_starts",
+        "cumulative_making_do_interruptions",
+        "cumulative_rework_due_to_making_do",
         "planning_quality",
         "trust_in_data",
         "trust_in_management",

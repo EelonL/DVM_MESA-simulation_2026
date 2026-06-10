@@ -49,6 +49,9 @@ class DVMConstructionModel(Model):
         self.daily_questions=0; self.daily_escalations=0; self.daily_coordination_needs=0; self.daily_recovery_interventions=0; self.daily_external_pressure=0; self.daily_useful=0; self.daily_harmful=0
         self.daily_making_do_starts=0; self.daily_making_do_interruptions=0; self.daily_rework_due_to_making_do=0.0
         self.weekly_commitments={}; self.current_committed_task_ids=set()
+        # v25.1: track actual completion promises so PPC cannot miss tasks that
+        # are truly completed during a week.
+        self.weekly_actual_completion_promises={}
         self.commitment_history={}
         self.week_length=5; self.current_picture=SituationPicture(0,0,0,0,0,0,0); self.trades=["drywall","mep","finishes","carpentry"]
         self.shock_schedule=generate_external_shock_schedule(seed,self.trades,self.simulation_hard_limit+40,daily_shock_probability)
@@ -194,6 +197,8 @@ class DVMConstructionModel(Model):
             "cumulative_schedule_adherence": lambda m: m.cumulative_schedule_adherence,
             "ppc_schedule_score": lambda m: m.ppc_schedule_score,
             "ppc_schedule_consistency_gap": lambda m: m.ppc_schedule_consistency_gap,
+            "total_ppc_promises": lambda m: m.total_ppc_promises,
+            "total_ppc_successes": lambda m: m.total_ppc_successes,
             "planned_tasks_this_week": lambda m: m.planned_tasks_this_week,
             "completed_on_plan_this_week": lambda m: m.completed_on_plan_this_week,
             "baseline_adherence": lambda m: m.baseline_adherence,
@@ -304,12 +309,30 @@ class DVMConstructionModel(Model):
         start, end = self._week_bounds(week)
         return [t for t in self.tasks if start <= self._planned_finish(t) <= end]
 
+    def _actual_completion_promises_in_week(self, week):
+        """Tasks actually completed during this week.
+
+        v25.1 interpretation:
+        If a task is completed in week W, it should be counted as a promised
+        completion of week W unless it was already explicitly promised in another
+        commitment set. This aligns PPC with actual weekly completion promises
+        and prevents completed tasks from falling outside the PPC denominator.
+        """
+        start, end = self._week_bounds(week)
+        return [
+            t for t in self.tasks
+            if t.actual_finish is not None and start <= t.actual_finish <= end
+        ]
+
     def _committed_in_week(self, week):
-        # v25.0: weekly commitment means promised completion.
-        # Baseline tasks planned to finish during the week are treated as the
-        # weekly promise base. Explicit commitments add carryover/lookahead work.
+        # v25.1: weekly commitment means promised completion.
+        # Combine explicit LPS commitments, baseline completion promises and
+        # tasks actually completed during the week. The latter prevents finished
+        # work from disappearing from PPC simply because it was already in progress
+        # when commitments were generated.
         ids = set(self.weekly_commitments.get(int(week), set()))
         ids.update(t.id for t in self._planned_in_week(week))
+        ids.update(t.id for t in self._actual_completion_promises_in_week(week))
         return [t for t in self.tasks if t.id in ids]
 
     def _completed_committed_in_week(self, week):
@@ -320,20 +343,29 @@ class DVMConstructionModel(Model):
         ]
 
     def _completed_on_plan_in_week(self, week):
-        # Backwards-compatible alias: in v24.6 PPC is based on weekly commitments.
         return self._completed_committed_in_week(week)
 
     def _weekly_ppc_value(self, week):
         committed = self._committed_in_week(week)
-        if committed:
-            return len(self._completed_committed_in_week(week)) / len(committed)
-
-        planned = self._planned_in_week(week)
-        if not planned:
+        if not committed:
             return None
-        _, end = self._week_bounds(week)
-        done = [t for t in planned if t.actual_finish is not None and t.actual_finish <= end]
-        return len(done) / len(planned)
+        return len(self._completed_committed_in_week(week)) / len(committed)
+
+    @property
+    def total_ppc_promises(self):
+        # Aggregate promised completions across the whole observed project.
+        # This is more stable than averaging small weekly percentages.
+        weeks = range(1, max(self.current_week, self._week_for_day(self.planned_project_duration)) + 1)
+        ids_by_week = {w: {t.id for t in self._committed_in_week(w)} for w in weeks}
+        return sum(len(ids) for ids in ids_by_week.values())
+
+    @property
+    def total_ppc_successes(self):
+        weeks = range(1, max(self.current_week, self._week_for_day(self.planned_project_duration)) + 1)
+        successes = 0
+        for w in weeks:
+            successes += len(self._completed_committed_in_week(w))
+        return successes
 
     @property
     def weekly_task_capacity(self):
@@ -398,12 +430,13 @@ class DVMConstructionModel(Model):
 
     @property
     def avg_weekly_ppc(self):
-        completed_weeks = [w for w in range(1, self.current_week + 1) if self.day >= self._week_bounds(w)[1]]
-        values = [self._weekly_ppc_value(w) for w in completed_weeks]
-        values = [v for v in values if v is not None]
-        if not values:
+        # v25.1: use aggregate PPC over all observed weekly promises:
+        # total successful promises / total promises. This avoids small empty or
+        # partial weeks distorting PPC and keeps it consistent with project completion.
+        promises = self.total_ppc_promises
+        if promises <= 0:
             return self.weekly_ppc or 0.0
-        return safe_mean(values)
+        return self.total_ppc_successes / promises
 
     @property
     def sound_commitment_share(self):
@@ -834,7 +867,13 @@ class DVMConstructionModel(Model):
             making_do_penalty=clamp_range(1.0-.45*cur.making_do_active*(1-cur.make_ready_score),.45,1.0)
             progress_factor=clamp_range(.72+.24*sa.comprehension+.20*self.planning_quality+.08*self.current_picture.readiness_quality-.10*self.dvm_scenario.reporting_burden,.45,1.35)
             cur.remaining_duration-=c.productivity*progress_factor*backlog_penalty*making_do_penalty; c.working_time+=1
-            if cur.remaining_duration<=0: cur.status=TaskStatus.COMPLETED; cur.actual_finish=self.day; cur.making_do_active=False; c.current_task_id=None
+            if cur.remaining_duration<=0:
+                cur.status=TaskStatus.COMPLETED
+                cur.actual_finish=self.day
+                cur.making_do_active=False
+                finish_week=self._week_for_day(self.day)
+                self.weekly_actual_completion_promises.setdefault(finish_week,set()).add(cur.id)
+                c.current_task_id=None
         else:
             task=self._choose_task(c)
             if task is None: c.idle_time+=1; return

@@ -109,6 +109,17 @@ def display_metric(df: pd.DataFrame, col: str, default: float = 0.0) -> float:
         return default
     return float(df[col].mean())
 
+def display_percent(df: pd.DataFrame, col: str, default: float = 0.0) -> str:
+    return f"{display_metric(df, col, default):.1%}"
+
+
+def switch_success_rate(df: pd.DataFrame) -> float:
+    if df.empty or "alternative_task_switches" not in df.columns or "failed_task_switches" not in df.columns:
+        return 0.0
+    total = df["alternative_task_switches"] + df["failed_task_switches"]
+    rate = df["alternative_task_switches"] / total.replace(0, pd.NA)
+    return float(rate.fillna(0).mean())
+
 
 def scenario_color(name: str) -> str:
     return SCENARIO_COLORS.get(name, "#378ADD")
@@ -470,7 +481,7 @@ single_excel_bytes = build_single_excel(df_ts, df_final, single_metadata)
 # ── Tabs ───────────────────────────────────────────────────────────────────────
 tab_results, tab_timeseries, tab_disruptions, tab_supervisor, tab_compare, tab_data = st.tabs(
     [
-        "📊 Results",
+        "📊 Overview",
         "📈 Time series",
         "⚡ Disruptions",
         "👷 Supervisor",
@@ -481,10 +492,14 @@ tab_results, tab_timeseries, tab_disruptions, tab_supervisor, tab_compare, tab_d
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — Results
+# TAB 1 — Results / Overview
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_results:
-    st.markdown(f"### {label} — {runs} runs")
+    st.markdown(f"### {label} — overview across {runs} runs")
+    st.caption(
+        "This page focuses on the resilience story: weekly plan reliability, "
+        "schedule backlog, recovery from disruptions and supervisor firefighting."
+    )
 
     dcol1, dcol2 = st.columns([1, 3])
     with dcol1:
@@ -498,91 +513,135 @@ with tab_results:
     with dcol2:
         st.caption("Workbook contains metadata, summary, final_run_metrics and timeseries sheets.")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Final day (avg)", f"{display_metric(df_final, 'day'):.0f}")
-    c2.metric("PPC proxy", f"{display_metric(df_final, 'ppc_proxy'):.3f}")
-    c3.metric("Crew SA", f"{display_metric(df_final, 'avg_sa'):.3f}")
-    c4.metric("Recovery time", f"{display_metric(df_final, 'avg_recovery_time'):.2f} d")
-    c5.metric("Firefighting ratio", f"{display_metric(df_final, 'firefighting_ratio'):.1%}")
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("Final day", f"{display_metric(df_final, 'day'):.0f}")
+    k2.metric("Avg weekly PPC", display_percent(df_final, "avg_weekly_ppc"))
+    k3.metric("Open backlog", f"{display_metric(df_final, 'open_schedule_backlog'):.1f} tasks")
+    k4.metric("Project delay", f"{display_metric(df_final, 'project_delay_days'):.1f} d")
+    k5.metric("Recovery time", f"{display_metric(df_final, 'avg_recovery_time'):.2f} d")
+    k6.metric("Firefighting", f"{display_metric(df_final, 'firefighting_ratio'):.1%}")
 
     st.divider()
 
     col_a, col_b = st.columns(2)
 
     with col_a:
-        fig = go.Figure()
-        fig.add_trace(
-            go.Histogram(
-                x=df_final["ppc_proxy"],
-                nbinsx=20,
-                marker_color=color,
-                opacity=0.85,
-                name="PPC proxy",
-            )
+        fig_ppc = line_mean_by_day(
+            df_ts,
+            metric="avg_weekly_ppc",
+            title="Weekly plan reliability over time",
+            color=color,
+            y_title="Average weekly PPC",
         )
-        fig.update_layout(
-            title="PPC proxy distribution across runs",
-            xaxis_title="PPC proxy",
-            yaxis_title="Runs",
-            **PLOTLY_LAYOUT,
+        fig_ppc.update_yaxes(range=[0, 1], tickformat=".0%")
+        fig_ppc.add_hline(
+            y=0.85,
+            line_dash="dash",
+            line_color="#888780",
+            annotation_text="85% reference",
+            annotation_position="bottom right",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig_ppc, use_container_width=True)
 
     with col_b:
-        fig2 = go.Figure()
-        fig2.add_trace(
-            go.Box(
-                y=df_final["total_idle_time"],
-                name="Idle total",
-                marker_color=color,
-                boxmean=True,
-            )
+        fig_backlog = line_mean_by_day(
+            df_ts,
+            metric="open_schedule_backlog",
+            title="Open schedule backlog over time",
+            color="#D85A30",
+            y_title="Open delayed tasks",
         )
-        if "total_idle_time_external" in df_final.columns:
-            fig2.add_trace(
-                go.Box(
-                    y=df_final["total_idle_time_external"],
-                    name="Idle external",
-                    marker_color="#D85A30",
-                    boxmean=True,
-                )
-            )
-        fig2.update_layout(
-            title="Idle time per run",
-            yaxis_title="Days",
-            **PLOTLY_LAYOUT,
-        )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig_backlog, use_container_width=True)
 
     col_c, col_d = st.columns(2)
 
     with col_c:
-        fig3 = px.scatter(
-            df_final,
-            x="avg_sa",
-            y="ppc_proxy",
-            color_discrete_sequence=[color],
-            opacity=0.65,
-            labels={"avg_sa": "Crew SA", "ppc_proxy": "PPC proxy"},
-            title="Crew situational awareness vs PPC proxy",
-            trendline="ols" if len(df_final) >= 3 else None,
+        fig_idle = go.Figure()
+        if "total_idle_time_external" in df_final.columns:
+            fig_idle.add_trace(
+                go.Box(
+                    y=df_final["total_idle_time_external"],
+                    name="External idle",
+                    marker_color="#D85A30",
+                    boxmean=True,
+                )
+            )
+        fig_idle.add_trace(
+            go.Box(
+                y=df_final["total_idle_time"],
+                name="Total idle",
+                marker_color=color,
+                boxmean=True,
+            )
         )
-        fig3.update_layout(**PLOTLY_LAYOUT)
-        st.plotly_chart(fig3, use_container_width=True)
+        fig_idle.update_layout(
+            title="Waiting time by run",
+            yaxis_title="Days",
+            **PLOTLY_LAYOUT,
+        )
+        st.plotly_chart(fig_idle, use_container_width=True)
 
     with col_d:
-        fig4 = px.scatter(
+        fig_recovery = px.scatter(
             df_final,
             x="avg_sa",
             y="avg_recovery_time",
             color_discrete_sequence=[color],
             opacity=0.65,
-            labels={"avg_sa": "Crew SA", "avg_recovery_time": "Average recovery time"},
-            title="Crew situational awareness vs recovery time",
+            labels={
+                "avg_sa": "Crew situation awareness, 0–1",
+                "avg_recovery_time": "Average recovery time from disruptions, days",
+            },
+            title="Do teams with better situation awareness recover faster?",
             trendline="ols" if len(df_final) >= 3 else None,
         )
-        fig4.update_layout(**PLOTLY_LAYOUT)
-        st.plotly_chart(fig4, use_container_width=True)
+        fig_recovery.update_layout(**PLOTLY_LAYOUT)
+        st.plotly_chart(fig_recovery, use_container_width=True)
+
+    col_e, col_f = st.columns(2)
+
+    with col_e:
+        if "alternative_task_switches" in df_final.columns and "total_idle_time_external" in df_final.columns:
+            fig_switch = px.scatter(
+                df_final,
+                x="alternative_task_switches",
+                y="total_idle_time_external",
+                color_discrete_sequence=["#1D9E75"],
+                opacity=0.65,
+                labels={
+                    "alternative_task_switches": "Successful alternative task switches",
+                    "total_idle_time_external": "External idle time, days",
+                },
+                title="Do alternative workfaces reduce external idle time?",
+                trendline="ols" if len(df_final) >= 3 else None,
+            )
+            fig_switch.update_layout(**PLOTLY_LAYOUT)
+            st.plotly_chart(fig_switch, use_container_width=True)
+
+    with col_f:
+        fig_delay = go.Figure()
+        fig_delay.add_trace(
+            go.Box(
+                y=df_final["project_delay_days"],
+                name="Project delay",
+                marker_color="#BA7517",
+                boxmean=True,
+            )
+        )
+        fig_delay.add_trace(
+            go.Box(
+                y=df_final["cumulative_plan_failures"],
+                name="Plan failures",
+                marker_color="#888780",
+                boxmean=True,
+            )
+        )
+        fig_delay.update_layout(
+            title="Delay and accumulated plan failures",
+            yaxis_title="Days / tasks",
+            **PLOTLY_LAYOUT,
+        )
+        st.plotly_chart(fig_delay, use_container_width=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -593,7 +652,11 @@ with tab_timeseries:
 
     metric_options = [
         "avg_sa",
-        "ppc_proxy",
+        "avg_weekly_ppc",
+        "weekly_ppc",
+        "open_schedule_backlog",
+        "cumulative_plan_failures",
+        "project_delay_days",
         "planning_quality",
         "trust_in_data",
         "trust_in_management",
@@ -917,7 +980,11 @@ with tab_compare:
         compare_metric = st.selectbox(
             "Comparison metric",
             options=[
-                "ppc_proxy",
+                "avg_weekly_ppc",
+                "last_completed_weekly_ppc",
+                "open_schedule_backlog",
+                "cumulative_plan_failures",
+                "project_delay_days",
                 "avg_sa",
                 "day",
                 "avg_recovery_time",
@@ -957,7 +1024,10 @@ with tab_compare:
             "Time-series metric",
             options=[
                 "avg_sa",
-                "ppc_proxy",
+                "avg_weekly_ppc",
+                "open_schedule_backlog",
+                "cumulative_plan_failures",
+                "project_delay_days",
                 "planning_quality",
                 "trust_in_data",
                 "firefighting_ratio",
@@ -976,7 +1046,11 @@ with tab_compare:
         st.markdown("#### Summary table")
         selected_cols = [
             "scenario",
-            "ppc_proxy",
+            "avg_weekly_ppc",
+            "last_completed_weekly_ppc",
+            "open_schedule_backlog",
+            "cumulative_plan_failures",
+            "project_delay_days",
             "avg_sa",
             "day",
             "avg_recovery_time",

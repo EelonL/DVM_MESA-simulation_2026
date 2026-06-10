@@ -58,6 +58,9 @@ class DVMConstructionModel(Model):
         self.available_crew_capacity_today=0.0
         self.planned_workload_today=0.0
         self.workload_pressure=0.0
+        self.active_crews=[]
+        self.active_crew_trades_today=""
+        self.hard_limit_reached=False
         self.tasks=[]; self.crews=[]; self._create_project(number_of_tasks)
         self._build_workload_and_resource_curves()
         self.planned_project_finish=float(self.planned_project_duration)
@@ -121,6 +124,12 @@ class DVMConstructionModel(Model):
     def _update_daily_load_state(self):
         day_index=int(clamp_range(self.day,0,len(self.resource_capacity_by_day)-1))
         self.active_crews_today=int(self.resource_capacity_by_day[day_index])
+        # If the project is late, keep a small completion crew mobilised, but do
+        # not assume all original trades stay on site. The selection of actual
+        # crews is done by _active_crews_for_today().
+        if self.day > self.planned_project_duration and any(not t.is_done for t in self.tasks):
+            remaining_trades={t.trade for t in self.tasks if not t.is_done}
+            self.active_crews_today=max(self.active_crews_today, min(len(remaining_trades), int(getattr(self.dvm_scenario, "max_active_crews", len(self.crews)))))
         self.available_crew_capacity_today=float(self.active_crews_today)
         self.planned_workload_today=float(self.planned_workload_by_day[day_index]) if day_index<len(self.planned_workload_by_day) else 0.0
         weekly_due=len(self._planned_in_week(self.current_week))
@@ -171,6 +180,9 @@ class DVMConstructionModel(Model):
             "remaining_tasks": lambda m: sum(not t.is_done for t in m.tasks),
             "total_tasks": lambda m: len(m.tasks),
             "actual_project_finish": lambda m: m.actual_project_finish,
+            "hard_limit_reached": lambda m: int(m.hard_limit_reached),
+            "incomplete_at_hard_limit": lambda m: int(m.hard_limit_reached and not all(t.is_done for t in m.tasks)),
+            "active_crew_trades_today": lambda m: m.active_crew_trades_today,
             "planned_workload_today": lambda m: m.planned_workload_today,
             "active_crews_today": lambda m: m.active_crews_today,
             "available_crew_capacity_today": lambda m: m.available_crew_capacity_today,
@@ -439,6 +451,84 @@ class DVMConstructionModel(Model):
     def ppc_proxy(self):
         return self.avg_weekly_ppc
 
+    def _trade_demand_scores(self):
+        """Estimate which trades are needed today.
+
+        This avoids the earlier error where the first N crews in the static list
+        stayed active while remaining tasks in other trades had no crew.
+        """
+        scores={tr:0.0 for tr in self.trades}
+        for t in self.tasks:
+            if t.is_done or t.external_blockage_active:
+                continue
+            score=0.0
+            if t.status==TaskStatus.IN_PROGRESS:
+                score+=12.0
+            if t.id in self.current_committed_task_ids:
+                score+=8.0
+            if t.status==TaskStatus.READY:
+                score+=5.0
+            if t.planned_start <= self.day:
+                score+=3.0
+            if self._planned_finish(t) < self.day:
+                score+=4.0
+            score+=max(0.0, t.priority)
+            scores[t.trade]=scores.get(t.trade,0.0)+score
+        return scores
+
+    def _active_crews_for_today(self):
+        """Choose active crews according to remaining trade-specific work demand."""
+        if not self.crews:
+            self.active_crew_trades_today=""
+            return []
+
+        n=max(1, min(int(self.active_crews_today), len(self.crews)))
+        demand=self._trade_demand_scores()
+
+        # Keep crews that already have in-progress work, but only while there is a slot.
+        selected=[]
+        selected_ids=set()
+        in_progress=sorted(
+            [c for c in self.crews if c.current_task_id is not None],
+            key=lambda c: demand.get(c.trade,0.0),
+            reverse=True,
+        )
+        for c in in_progress:
+            if len(selected)>=n:
+                break
+            selected.append(c); selected_ids.add(c.id)
+
+        # Then choose crews from the trades with highest current demand.
+        trade_order=sorted(self.trades, key=lambda tr: (demand.get(tr,0.0), -self.trades.index(tr)), reverse=True)
+        # Rotate tie-breaking slightly so a low-capacity tail does not always pick the same trades.
+        if trade_order:
+            shift=self.day % len(trade_order)
+            trade_order=trade_order[shift:]+trade_order[:shift]
+
+        for tr in trade_order:
+            if len(selected)>=n:
+                break
+            if demand.get(tr,0.0)<=0:
+                continue
+            candidates=[c for c in self.crews if c.trade==tr and c.id not in selected_ids]
+            if not candidates:
+                continue
+            # Prefer closer and more productive crews.
+            c=max(candidates, key=lambda c: c.productivity + .05*c.experience - .01*abs(c.location))
+            selected.append(c); selected_ids.add(c.id)
+
+        # Fill any remaining slots with generally useful crews, so the model can still recover.
+        if len(selected)<n:
+            rest=[c for c in self.crews if c.id not in selected_ids]
+            rest=sorted(rest, key=lambda c: (demand.get(c.trade,0.0), c.productivity), reverse=True)
+            for c in rest:
+                selected.append(c); selected_ids.add(c.id)
+                if len(selected)>=n:
+                    break
+
+        self.active_crew_trades_today=",".join(c.trade for c in selected)
+        return selected
+
     def step(self):
         self.daily_questions=self.daily_escalations=self.daily_coordination_needs=self.daily_recovery_interventions=0; self.daily_external_pressure=0; self.daily_useful=0; self.daily_harmful=0
         self.daily_making_do_starts=0; self.daily_making_do_interruptions=0; self.daily_rework_due_to_making_do=0.0
@@ -447,12 +537,15 @@ class DVMConstructionModel(Model):
         if self.day % self.week_length == 0:
             self._make_weekly_commitments()
         self._update_readiness()
-        for c in list(self.crews[:self.active_crews_today]): c.step()
+        self.active_crews=self._active_crews_for_today()
+        for c in list(self.active_crews): c.step()
         self.daily_coordination_needs += self._baseline_coordination_needs()
         self.supervisor.process_day(self.daily_questions,self.daily_escalations,self.daily_coordination_needs,self.daily_recovery_interventions,self.daily_external_pressure)
         self._update_trust(); self.datacollector.collect(self); self.day+=1
         if sum(t.is_done for t in self.tasks)==len(self.tasks): self.running=False
-        if self.day>=self.simulation_hard_limit: self.running=False
+        if self.day>=self.simulation_hard_limit:
+            self.hard_limit_reached=True
+            self.running=False
     def _baseline_coordination_needs(self):
         """Daily production coordination load not directly caused by crew questions.
 

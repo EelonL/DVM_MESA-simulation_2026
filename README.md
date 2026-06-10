@@ -1,10 +1,14 @@
-# v25.1 actual-completion-aligned PPC
+# v25.2 planned baseline alignment
 
 Replace:
 - app.py
 - dvm_abm/model.py
 
 Main correction:
-- PPC is now calculated as total successful weekly completion promises / total weekly completion promises.
-- Tasks that actually complete in week W are included in week W's completion promises.
-- This prevents completed tasks from being left outside the PPC denominator and should make PPC consistent with project completion.
+- Planned task finishes are distributed over the full planned project duration.
+- Earlier versions compressed planned task starts into about 82% of the planned duration, which made near-on-time projects look late in PPC/task-level metrics.
+- Carryover recommitment is moderated so the same unsound task does not inflate the PPC denominator indefinitely.
+
+Expected effect:
+- Near-on-time scenarios should show higher PPC.
+- Low-PPC scenarios can still show pushed/colliding tasks and delayed project finish.

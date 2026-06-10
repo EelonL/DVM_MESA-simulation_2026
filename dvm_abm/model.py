@@ -192,6 +192,8 @@ class DVMConstructionModel(Model):
             "completed_committed_tasks": lambda m: m.completed_committed_tasks,
             "weekly_task_capacity": lambda m: m.weekly_task_capacity,
             "cumulative_schedule_adherence": lambda m: m.cumulative_schedule_adherence,
+            "ppc_schedule_score": lambda m: m.ppc_schedule_score,
+            "ppc_schedule_consistency_gap": lambda m: m.ppc_schedule_consistency_gap,
             "planned_tasks_this_week": lambda m: m.planned_tasks_this_week,
             "completed_on_plan_this_week": lambda m: m.completed_on_plan_this_week,
             "baseline_adherence": lambda m: m.baseline_adherence,
@@ -303,7 +305,11 @@ class DVMConstructionModel(Model):
         return [t for t in self.tasks if start <= self._planned_finish(t) <= end]
 
     def _committed_in_week(self, week):
-        ids=self.weekly_commitments.get(int(week), set())
+        # v25.0: weekly commitment means promised completion.
+        # Baseline tasks planned to finish during the week are treated as the
+        # weekly promise base. Explicit commitments add carryover/lookahead work.
+        ids = set(self.weekly_commitments.get(int(week), set()))
+        ids.update(t.id for t in self._planned_in_week(week))
         return [t for t in self.tasks if t.id in ids]
 
     def _completed_committed_in_week(self, week):
@@ -478,6 +484,19 @@ class DVMConstructionModel(Model):
             elif self.day > planned_finish:
                 lateness.append(self.day - planned_finish)
         return safe_mean(lateness)
+
+    @property
+    def ppc_schedule_consistency_gap(self):
+        # Diagnostic: a near-on-time project with very low PPC is suspicious.
+        # Schedule score is 1.0 at or before planned duration and declines with delay.
+        delay = self.project_delay_days
+        schedule_score = clamp_range(1.0 - delay / max(1.0, float(self.planned_project_duration)), 0.0, 1.0)
+        return max(0.0, schedule_score - self.avg_weekly_ppc)
+
+    @property
+    def ppc_schedule_score(self):
+        delay = self.project_delay_days
+        return clamp_range(1.0 - delay / max(1.0, float(self.planned_project_duration)), 0.0, 1.0)
 
     @property
     def ppc_proxy(self):
@@ -657,14 +676,13 @@ class DVMConstructionModel(Model):
         return t.make_ready_score >= self.dvm_scenario.make_ready_threshold and t.constraints.get("predecessor_ready",False)
 
     def _make_weekly_commitments(self):
-        """Create LPS weekly commitments from weekly-sized tasks.
+        """Create LPS weekly completion promises.
 
-        v24.9 modelling assumption:
-        - LPS tasks are already broken down so that a committed task can be
-          completed within one week.
-        - Therefore weekly capacity is measured in crew-weeks/tasks, not crew-days.
-        - PPC measures promised weekly completions, while project delay measures
-          realized project completion.
+        v25.0 modelling assumption:
+        - LPS tasks are weekly-sized packages.
+        - The weekly plan promises completions, not merely starts.
+        - Tasks planned to finish this week form the baseline promise set.
+        - Already in-progress tasks can also be promised for completion this week.
         """
         s = self.dvm_scenario
         r = self.py_random
@@ -681,7 +699,7 @@ class DVMConstructionModel(Model):
         open_tasks = [
             t for t in self.tasks
             if not t.is_done and not t.external_blockage_active
-            and t.status in (TaskStatus.NOT_READY, TaskStatus.READY, TaskStatus.INTERRUPTED)
+            and t.status in (TaskStatus.NOT_READY, TaskStatus.READY, TaskStatus.INTERRUPTED, TaskStatus.IN_PROGRESS)
         ]
 
         planned_this_week = [
@@ -689,21 +707,35 @@ class DVMConstructionModel(Model):
             if start <= self._planned_finish(t) <= end
         ]
 
+        in_progress_promises = [
+            t for t in open_tasks
+            if t.status == TaskStatus.IN_PROGRESS
+            and t not in planned_this_week
+            and self._planned_finish(t) <= end + self.week_length
+        ]
+
         carryover = [
             t for t in open_tasks
             if self._planned_finish(t) < start
+            and t not in in_progress_promises
         ]
 
         lookahead = [
             t for t in open_tasks
             if end < self._planned_finish(t) <= end + self.week_length
+            and t not in in_progress_promises
         ]
 
         capacity = self.weekly_task_capacity
-        overcommit_multiplier = 1.0 + 0.45 * s.overcommitment_tendency - 0.22 * s.commitment_realism
-        target = max(1, int(round(capacity * overcommit_multiplier)))
+
+        # The planned-this-week set is the core weekly promise. Capacity affects
+        # how much additional carryover/lookahead the team dares to promise.
+        overcommit_multiplier = 1.0 + 0.35 * s.overcommitment_tendency - 0.18 * s.commitment_realism
+        target = max(len(planned_this_week), int(round(capacity * overcommit_multiplier)))
+        target = max(1, target)
 
         candidates = []
+        candidates.extend(in_progress_promises)
         candidates.extend(carryover)
         candidates.extend(planned_this_week)
         if len(candidates) < target:
@@ -721,11 +753,13 @@ class DVMConstructionModel(Model):
             return
 
         def commit_score(t):
-            planned_urgency = 2.0 if start <= self._planned_finish(t) <= end else 0.0
-            carryover_urgency = 2.5 if self._planned_finish(t) < start else 0.0
+            planned_urgency = 3.0 if start <= self._planned_finish(t) <= end else 0.0
+            in_progress_bonus = 3.0 if t.status == TaskStatus.IN_PROGRESS else 0.0
+            carryover_urgency = 2.8 if self._planned_finish(t) < start else 0.0
             sound_bonus = 2.0 if self._is_sound_task(t) else 0.0
             return (
-                carryover_urgency
+                in_progress_bonus
+                + carryover_urgency
                 + planned_urgency
                 + sound_bonus
                 + 1.2 * t.make_ready_score
@@ -737,16 +771,18 @@ class DVMConstructionModel(Model):
 
         committed = []
         for t in unique:
-            sound = self._is_sound_task(t)
+            sound = self._is_sound_task(t) or t.status == TaskStatus.IN_PROGRESS
+            # Planned-this-week and in-progress tasks are normally completion promises.
+            is_core_promise = (start <= self._planned_finish(t) <= end) or (t.status == TaskStatus.IN_PROGRESS)
             risky_commit_prob = clamp(
                 (1 - s.constraint_screening_strength)
                 * s.overcommitment_tendency
-                * (1 + 0.45 * self.workload_pressure)
+                * (1 + 0.35 * self.workload_pressure)
             )
-            if sound or r.random() < risky_commit_prob:
+            if is_core_promise or sound or r.random() < risky_commit_prob:
                 t.committed_week = week
                 t.commitment_day = self.day
-                t.commitment_sound = sound
+                t.commitment_sound = bool(sound)
                 committed.append(t)
             if len(committed) >= target:
                 break
@@ -759,6 +795,8 @@ class DVMConstructionModel(Model):
             "sound": sum(t.commitment_sound for t in committed),
             "capacity": capacity,
             "target": target,
+            "planned_this_week": len(planned_this_week),
+            "in_progress_promises": len(in_progress_promises),
         }
 
     def _update_readiness(self):

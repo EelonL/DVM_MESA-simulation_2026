@@ -29,9 +29,10 @@ class DVMConstructionModel(Model):
         self.useful_dvm_events=0; self.harmful_events=0; self.external_disruptions=0; self.external_disruptions_by_type={}; self.recovery_times=[]; self.blockage_resolution_times=[]
         self.total_recovery_time=0.0; self.alternative_task_switches=0; self.failed_task_switches=0; self.supervisor_recovery_interventions=0; self.idle_time_due_to_external_disruptions=0.0
         self.daily_questions=0; self.daily_escalations=0; self.daily_coordination_needs=0; self.daily_recovery_interventions=0; self.daily_external_pressure=0; self.daily_useful=0; self.daily_harmful=0
-        self.current_picture=SituationPicture(0,0,0,0,0,0,0); self.trades=["drywall","mep","finishes","carpentry"]
+        self.week_length=5; self.current_picture=SituationPicture(0,0,0,0,0,0,0); self.trades=["drywall","mep","finishes","carpentry"]
         self.shock_schedule=generate_external_shock_schedule(seed,self.trades,max_days+40,daily_shock_probability)
         self.tasks=[]; self.crews=[]; self._create_project(number_of_tasks)
+        self.planned_project_finish=max((self._planned_finish(t) for t in self.tasks), default=0.0)
         self.datacollector=DataCollector(model_reporters=self._reporters()); self.datacollector.collect(self)
     def _create_project(self,n):
         r=self.py_random
@@ -46,8 +47,20 @@ class DVMConstructionModel(Model):
         return {
             "scenario": lambda m: m.dvm_scenario.name,
             "day": "day",
+            "week": lambda m: m.current_week,
             "completed_tasks": lambda m: sum(t.is_done for t in m.tasks),
             "total_tasks": lambda m: len(m.tasks),
+            "planned_tasks_this_week": lambda m: m.planned_tasks_this_week,
+            "completed_on_plan_this_week": lambda m: m.completed_on_plan_this_week,
+            "weekly_ppc": lambda m: m.weekly_ppc,
+            "avg_weekly_ppc": lambda m: m.avg_weekly_ppc,
+            "last_completed_weekly_ppc": lambda m: m.last_completed_weekly_ppc,
+            "weekly_carryover": lambda m: m.weekly_carryover,
+            "open_schedule_backlog": lambda m: m.open_schedule_backlog,
+            "cumulative_plan_failures": lambda m: m.cumulative_plan_failures,
+            "project_delay_days": lambda m: m.project_delay_days,
+            "avg_lateness_days": lambda m: m.avg_lateness_days,
+            "late_completed_tasks": lambda m: m.late_completed_tasks,
             "ppc_proxy": lambda m: m.ppc_proxy,
             "avg_sa": lambda m: safe_mean([c.last_sa for c in m.crews]),
             "sa_std": lambda m: pstdev([c.last_sa for c in m.crews]) if len(m.crews) > 1 else 0.0,
@@ -108,9 +121,127 @@ class DVMConstructionModel(Model):
             "weather_condition_count": lambda m: m.external_disruptions_by_type.get("weather_or_site_condition", 0),
         }
 
+    def _planned_finish(self, task):
+        return float(task.planned_start + task.planned_duration)
+
+    def _week_for_day(self, day_value):
+        return int(day_value // self.week_length) + 1
+
+    @property
+    def current_week(self):
+        return self._week_for_day(self.day)
+
+    def _week_bounds(self, week):
+        start = (int(week) - 1) * self.week_length
+        end = start + self.week_length - 1
+        return start, end
+
+    def _planned_in_week(self, week):
+        start, end = self._week_bounds(week)
+        return [t for t in self.tasks if start <= self._planned_finish(t) <= end]
+
+    def _completed_on_plan_in_week(self, week):
+        _, end = self._week_bounds(week)
+        return [
+            t for t in self._planned_in_week(week)
+            if t.actual_finish is not None and t.actual_finish <= end
+        ]
+
+    def _weekly_ppc_value(self, week):
+        planned = self._planned_in_week(week)
+        if not planned:
+            return 0.0
+        return len(self._completed_on_plan_in_week(week)) / len(planned)
+
+    @property
+    def planned_tasks_this_week(self):
+        return len(self._planned_in_week(self.current_week))
+
+    @property
+    def completed_on_plan_this_week(self):
+        return len(self._completed_on_plan_in_week(self.current_week))
+
+    @property
+    def weekly_ppc(self):
+        return self._weekly_ppc_value(self.current_week)
+
+    @property
+    def last_completed_weekly_ppc(self):
+        completed_weeks = [w for w in range(1, self.current_week + 1) if self.day >= self._week_bounds(w)[1]]
+        completed_weeks = [w for w in completed_weeks if self._planned_in_week(w)]
+        if not completed_weeks:
+            return self.weekly_ppc
+        return self._weekly_ppc_value(max(completed_weeks))
+
+    @property
+    def avg_weekly_ppc(self):
+        completed_weeks = [w for w in range(1, self.current_week + 1) if self.day >= self._week_bounds(w)[1]]
+        values = [self._weekly_ppc_value(w) for w in completed_weeks if self._planned_in_week(w)]
+        if not values:
+            return self.weekly_ppc
+        return safe_mean(values)
+
+    @property
+    def weekly_carryover(self):
+        # Open tasks from the current planned week after the week has ended.
+        _, end = self._week_bounds(self.current_week)
+        if self.day < end:
+            return 0
+        return max(0, self.planned_tasks_this_week - self.completed_on_plan_this_week)
+
+    @property
+    def open_schedule_backlog(self):
+        # Planned to be finished before today, but still not complete.
+        return sum((not t.is_done) and self._planned_finish(t) < self.day for t in self.tasks)
+
+    @property
+    def cumulative_plan_failures(self):
+        # Count all weekly commitments that have already failed. Late completion
+        # does not erase the historical PPC failure.
+        failures = 0
+        for t in self.tasks:
+            planned_week = self._week_for_day(self._planned_finish(t))
+            _, week_end = self._week_bounds(planned_week)
+            if self.day >= week_end:
+                if t.actual_finish is None or t.actual_finish > week_end:
+                    failures += 1
+        return failures
+
+    @property
+    def late_completed_tasks(self):
+        return sum(
+            t.actual_finish is not None
+            and t.actual_finish > self._week_bounds(self._week_for_day(self._planned_finish(t)))[1]
+            for t in self.tasks
+        )
+
+    @property
+    def project_delay_days(self):
+        if not self.tasks:
+            return 0.0
+        all_done = all(t.is_done for t in self.tasks)
+        if all_done:
+            actual_finish = max((t.actual_finish or 0) for t in self.tasks)
+            return max(0.0, actual_finish - self.planned_project_finish)
+        return max(0.0, self.day - self.planned_project_finish)
+
+    @property
+    def avg_lateness_days(self):
+        lateness = []
+        for t in self.tasks:
+            planned_finish = self._planned_finish(t)
+            if t.actual_finish is not None:
+                lateness.append(max(0.0, t.actual_finish - planned_finish))
+            elif self.day > planned_finish:
+                lateness.append(self.day - planned_finish)
+        return safe_mean(lateness)
+
     @property
     def ppc_proxy(self):
-        due=[t for t in self.tasks if t.planned_start+t.planned_duration<=self.day]; return sum(t.is_done for t in due)/len(due) if due else 0
+        # Backwards-compatible alias. In v2.4 this now means average weekly PPC
+        # over completed weeks, not final cumulative completion.
+        return self.avg_weekly_ppc
+
     def step(self):
         self.daily_questions=self.daily_escalations=self.daily_coordination_needs=self.daily_recovery_interventions=0; self.daily_external_pressure=0; self.daily_useful=0; self.daily_harmful=0
         self._update_blockages(); self.current_picture=self._picture(); self._update_readiness()
@@ -158,7 +289,7 @@ class DVMConstructionModel(Model):
     def _task(self,i): return next((t for t in self.tasks if t.id==i),None) if i is not None else None
     def _choose_task(self,c):
         cand=[t for t in self.tasks if t.trade==c.trade and t.status==TaskStatus.READY and not t.external_blockage_active and not t.is_done]
-        return max(cand,key=lambda t:t.priority+.2*self.planning_quality-.05*abs(t.location-c.location)) if cand else None
+        return max(cand,key=lambda t:t.priority+.2*self.planning_quality+.08*max(0,self.day-self._planned_finish(t))-.05*abs(t.location-c.location)) if cand else None
     def _pop_shock(self,trade):
         for sh in self.shock_schedule.get(self.day,[]):
             if not sh.consumed and sh.trade==trade: sh.consumed=True; return sh

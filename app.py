@@ -46,7 +46,7 @@ from dvm_abm.scenarios import load_scenarios, Scenario
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="DVM-ABM Simulator",
+    page_title="DVM-ABM simulator",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -63,11 +63,11 @@ SCENARIO_COLORS = {
 }
 
 SCENARIO_LABELS = {
-    "analog_vm": "Analog VM",
-    "management_dashboard": "Management Dashboard",
-    "forced_reporting_dvm": "Forced Reporting DVM",
-    "workface_dvm": "Ready Work Area DVM",
-    "dvm_lean_autonomous": "DVM Lean Autonomous",
+    "analog_vm": "Analog visual management",
+    "management_dashboard": "Management dashboard",
+    "forced_reporting_dvm": "DVM as forced reporting",
+    "workface_dvm": "Ready work area DVM",
+    "dvm_lean_autonomous": "Lean-autonomous DVM",
 }
 
 DISRUPTION_LABELS = {
@@ -83,21 +83,23 @@ PLOTLY_LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
     font=dict(family="sans-serif", size=12, color="#444"),
-    margin=dict(l=8, r=8, t=88, b=8),
+    margin=dict(l=8, r=8, t=92, b=16),
     title_x=0.0,
     title_y=0.98,
     title_xanchor="left",
     title_yanchor="top",
-    title_pad=dict(t=2, b=22),
+    title_pad=dict(t=2, b=24),
     legend=dict(
         orientation="h",
         yanchor="bottom",
-        y=1.10,
+        y=1.12,
         xanchor="left",
         x=0,
-        bgcolor="rgba(255,255,255,0.65)",
+        bgcolor="rgba(255,255,255,0.75)",
     ),
 )
+
+APP_DATA_VERSION = "v24_3_language_layout_ppc_guard"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -187,6 +189,7 @@ def build_compare_excel(
 
 @st.cache_data(show_spinner=False)
 def cached_run_single(
+    app_data_version: str,
     scenario_name: str,
     runs: int,
     max_days: int,
@@ -259,6 +262,42 @@ def cached_run_all_scenarios(
     return df_all_ts, df_all_final, df_summary
 
 
+FRIENDLY_METRIC_NAMES = {
+    "avg_weekly_ppc": "Average weekly PPC",
+    "weekly_ppc": "Weekly PPC",
+    "last_completed_weekly_ppc": "Last completed weekly PPC",
+    "open_schedule_backlog": "Open schedule backlog",
+    "cumulative_plan_failures": "Accumulated plan failures",
+    "project_delay_days": "Project delay, days",
+    "avg_lateness_days": "Average lateness, days",
+    "late_completed_tasks": "Late completed tasks",
+    "avg_sa": "Crew situation awareness",
+    "avg_recovery_time": "Average recovery time, days",
+    "total_idle_time": "Total waiting time, days",
+    "total_idle_time_external": "External waiting time, days",
+    "idle_time_due_to_external_disruptions": "External waiting time, days",
+    "firefighting_ratio": "Firefighting ratio",
+    "planning_quality": "Planning quality",
+    "trust_in_data": "Trust in data",
+    "trust_in_management": "Trust in management",
+    "avg_adoption": "Average adoption",
+    "avg_effective_use": "Average effective DVM use",
+    "supervisor_utilization": "Supervisor utilization",
+    "supervisor_backlog": "Supervisor backlog",
+    "cumulative_reactive_time": "Cumulative reactive supervisor time",
+    "cumulative_planning_time": "Cumulative planning time",
+    "alternative_task_switches": "Successful alternative ready work area switches",
+    "failed_task_switches": "Failed alternative task switches",
+    "supervisor_recovery_interventions": "Supervisor recovery interventions",
+    "active_external_blockages": "Active external blockages",
+    "day": "Final day",
+}
+
+
+def friendly_metric_name(metric: str) -> str:
+    return FRIENDLY_METRIC_NAMES.get(metric, str(metric).replace("_", " ").capitalize())
+
+
 def line_mean_by_day(
     df: pd.DataFrame,
     metric: str,
@@ -266,10 +305,23 @@ def line_mean_by_day(
     color: str,
     y_title: str | None = None,
 ) -> go.Figure:
+    fig = go.Figure()
+    if df.empty or "day" not in df.columns or metric not in df.columns:
+        fig.update_layout(
+            title=title,
+            xaxis_title="Day",
+            yaxis_title=y_title or metric,
+            **PLOTLY_LAYOUT,
+        )
+        fig.add_annotation(
+            text=f"Metric not available in the current simulation data: {metric}",
+            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+        )
+        return fig
+
     agg = df.groupby("day", observed=True)[metric].agg(["mean", "std"]).reset_index()
     agg["std"] = agg["std"].fillna(0)
 
-    fig = go.Figure()
     fig.add_trace(
         go.Scatter(
             x=pd.concat([agg["day"], agg["day"][::-1]]),
@@ -300,8 +352,21 @@ def line_mean_by_day(
     return fig
 
 
-def line_compare_by_scenario(df: pd.DataFrame, metric: str, title: str) -> go.Figure:
+def line_compare_by_scenario(df: pd.DataFrame, metric: str, title: str, y_title: str | None = None) -> go.Figure:
     fig = go.Figure()
+    if df.empty or "day" not in df.columns or "scenario" not in df.columns or metric not in df.columns:
+        fig.update_layout(
+            title=title,
+            xaxis_title="Day",
+            yaxis_title=y_title or friendly_metric_name(metric),
+            **PLOTLY_LAYOUT,
+        )
+        fig.add_annotation(
+            text=f"Metric not available in the current simulation data: {metric}",
+            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+        )
+        return fig
+
     for scenario_name, g in df.groupby("scenario", observed=True):
         ts = g.groupby("day", observed=True)[metric].mean()
         fig.add_trace(
@@ -313,7 +378,12 @@ def line_compare_by_scenario(df: pd.DataFrame, metric: str, title: str) -> go.Fi
                 line=dict(color=scenario_color(str(scenario_name)), width=2),
             )
         )
-    fig.update_layout(title=title, xaxis_title="Day", yaxis_title=metric, **PLOTLY_LAYOUT)
+    fig.update_layout(
+        title=title,
+        xaxis_title="Day",
+        yaxis_title=y_title or friendly_metric_name(metric),
+        **PLOTLY_LAYOUT,
+    )
     return fig
 
 
@@ -327,6 +397,41 @@ def minmax(series: pd.Series, invert: bool = False) -> pd.Series:
     return 1 - out if invert else out
 
 
+
+def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add safe fallback columns so old cached/partial simulation data does not crash the UI."""
+    if df is None or df.empty:
+        return df
+    df = df.copy()
+
+    if "avg_weekly_ppc" not in df.columns:
+        if "weekly_ppc" in df.columns:
+            df["avg_weekly_ppc"] = df["weekly_ppc"]
+        elif "ppc_proxy" in df.columns:
+            df["avg_weekly_ppc"] = df["ppc_proxy"]
+        else:
+            df["avg_weekly_ppc"] = 0.0
+
+    if "weekly_ppc" not in df.columns:
+        df["weekly_ppc"] = df["avg_weekly_ppc"]
+
+    fallback_zero_cols = [
+        "last_completed_weekly_ppc",
+        "planned_tasks_this_week",
+        "completed_on_plan_this_week",
+        "weekly_carryover",
+        "open_schedule_backlog",
+        "cumulative_plan_failures",
+        "project_delay_days",
+        "avg_lateness_days",
+        "late_completed_tasks",
+    ]
+    for col in fallback_zero_cols:
+        if col not in df.columns:
+            df[col] = 0.0
+
+    return df
+
 # ── Load scenarios ─────────────────────────────────────────────────────────────
 try:
     SCENARIOS = cached_load_scenarios()
@@ -338,8 +443,8 @@ except Exception as exc:
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 🏗️ DVM-ABM Simulator")
-    st.caption("Mesa version — Streamlit UI")
+    st.markdown("## 🏗️ DVM-ABM simulator")
+    st.caption("Mesa-based simulation model")
     st.caption("Results can be downloaded as Excel files.")
     st.divider()
 
@@ -425,6 +530,7 @@ with st.sidebar:
 
 # ── Session state and simulation run ───────────────────────────────────────────
 cache_key = (
+    APP_DATA_VERSION,
     selected_scenario_name,
     runs,
     max_days,
@@ -462,6 +568,8 @@ if st.session_state["single_result"] is None:
     st.stop()
 
 df_ts, df_final = st.session_state["single_result"]
+df_ts = ensure_v24_columns(df_ts)
+df_final = ensure_v24_columns(df_final)
 
 color = scenario_color(selected_scenario_name)
 label = scenario_label(selected_scenario_name)
@@ -510,7 +618,7 @@ tab_results, tab_timeseries, tab_disruptions, tab_supervisor, tab_compare, tab_d
 with tab_results:
     st.markdown(f"### {label} — overview across {runs} runs")
     st.caption(
-        "This page focuses on the resilience story: weekly plan reliability, "
+        "This page shows the resilience logic of the model: weekly plan reliability, "
         "schedule backlog, recovery from disruptions and supervisor firefighting."
     )
 
@@ -528,11 +636,11 @@ with tab_results:
 
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     k1.metric("Final day", f"{display_metric(df_final, 'day'):.0f}")
-    k2.metric("Avg weekly PPC", display_percent(df_final, "avg_weekly_ppc"))
+    k2.metric("Average weekly PPC", display_percent(df_final, "avg_weekly_ppc"))
     k3.metric("Open backlog", f"{display_metric(df_final, 'open_schedule_backlog'):.1f} tasks")
     k4.metric("Project delay", f"{display_metric(df_final, 'project_delay_days'):.1f} d")
-    k5.metric("Recovery time", f"{display_metric(df_final, 'avg_recovery_time'):.2f} d")
-    k6.metric("Firefighting", f"{display_metric(df_final, 'firefighting_ratio'):.1%}")
+    k5.metric("Average recovery time", f"{display_metric(df_final, 'avg_recovery_time'):.2f} d")
+    k6.metric("Firefighting ratio", f"{display_metric(df_final, 'firefighting_ratio'):.1%}")
 
     st.divider()
 
@@ -574,7 +682,7 @@ with tab_results:
             fig_idle.add_trace(
                 go.Box(
                     y=df_final["total_idle_time_external"],
-                    name="External idle",
+                    name="External waiting",
                     marker_color="#D85A30",
                     boxmean=True,
                 )
@@ -582,13 +690,13 @@ with tab_results:
         fig_idle.add_trace(
             go.Box(
                 y=df_final["total_idle_time"],
-                name="Total idle",
+                name="Total waiting",
                 marker_color=color,
                 boxmean=True,
             )
         )
         fig_idle.update_layout(
-            title="Waiting time by run",
+            title="Waiting time across runs",
             yaxis_title="Days",
             **PLOTLY_LAYOUT,
         )
@@ -605,7 +713,7 @@ with tab_results:
                 "avg_sa": "Crew situation awareness, 0–1",
                 "avg_recovery_time": "Average recovery time from disruptions, days",
             },
-            title="Do teams with better situation awareness recover faster?",
+            title="Do crews with better situation awareness recover faster?",
             trendline="ols" if len(df_final) >= 3 else None,
         )
         fig_recovery.update_layout(**PLOTLY_LAYOUT)
@@ -622,10 +730,10 @@ with tab_results:
                 color_discrete_sequence=["#1D9E75"],
                 opacity=0.65,
                 labels={
-                    "alternative_task_switches": "Successful alternative task switches",
-                    "total_idle_time_external": "External idle time, days",
+                    "alternative_task_switches": "Successful alternative ready work area switches",
+                    "total_idle_time_external": "External waiting time, days",
                 },
-                title="Do alternative ready work areas reduce external idle time?",
+                title="Do alternative ready work areas reduce external waiting time?",
                 trendline="ols" if len(df_final) >= 3 else None,
             )
             fig_switch.update_layout(**PLOTLY_LAYOUT)
@@ -650,7 +758,7 @@ with tab_results:
             )
         )
         fig_delay.update_layout(
-            title="Delay and accumulated plan failures",
+            title="Project delay and accumulated plan failures",
             yaxis_title="Days / tasks",
             **PLOTLY_LAYOUT,
         )
@@ -689,7 +797,7 @@ with tab_timeseries:
     ts_metric = st.selectbox(
         "Metric",
         options=metric_options,
-        format_func=lambda x: x.replace("_", " "),
+        format_func=friendly_metric_name,
     )
 
     fig_ts = line_mean_by_day(
@@ -734,8 +842,8 @@ with tab_disruptions:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("External disruptions", f"{display_metric(df_final, 'external_disruptions'):.1f}")
     c2.metric("Avg recovery time", f"{display_metric(df_final, 'avg_recovery_time'):.2f} d")
-    c3.metric("Alternative switches", f"{display_metric(df_final, 'alternative_task_switches'):.1f}")
-    c4.metric("External idle time", f"{display_metric(df_final, 'idle_time_due_to_external_disruptions'):.1f} d")
+    c3.metric("Alternative ready work area switches", f"{display_metric(df_final, 'alternative_task_switches'):.1f}")
+    c4.metric("External waiting time", f"{display_metric(df_final, 'idle_time_due_to_external_disruptions'):.1f} d")
 
     st.divider()
 
@@ -757,7 +865,7 @@ with tab_disruptions:
             )
         )
         fig_d.update_layout(
-            title="Disruption type distribution",
+            title="External disruption types",
             xaxis_title="Average count per run",
             **PLOTLY_LAYOUT,
         )
@@ -774,7 +882,7 @@ with tab_disruptions:
             )
         )
         fig_r.update_layout(
-            title="Average recovery time per run",
+            title="Average recovery time across runs",
             xaxis_title="Days",
             yaxis_title="Runs",
             **PLOTLY_LAYOUT,
@@ -816,12 +924,12 @@ with tab_disruptions:
         )
         st.plotly_chart(fig_bl, use_container_width=True)
 
-    st.markdown("#### Recovery mechanism")
+    st.markdown("#### Recovery mechanisms")
     fig_rec = go.Figure()
     fig_rec.add_trace(
         go.Box(
             y=df_final["alternative_task_switches"],
-            name="Alternative switches",
+            name="Alternative ready work area switches",
             marker_color="#1D9E75",
             boxmean=True,
         )
@@ -969,6 +1077,8 @@ with tab_compare:
         st.info("Press **🔄 Run all scenarios** to see the comparison.")
     else:
         df_all_ts, df_all_final, df_summary = all_result
+        df_all_ts = ensure_v24_columns(df_all_ts)
+        df_all_final = ensure_v24_columns(df_all_final)
 
         compare_metadata = {
             "model": "DVM-ABM Mesa",
@@ -990,28 +1100,30 @@ with tab_compare:
             use_container_width=True,
         )
 
+        preferred_compare_metrics = [
+            "avg_weekly_ppc",
+            "last_completed_weekly_ppc",
+            "open_schedule_backlog",
+            "cumulative_plan_failures",
+            "project_delay_days",
+            "avg_sa",
+            "day",
+            "avg_recovery_time",
+            "total_idle_time",
+            "total_idle_time_external",
+            "firefighting_ratio",
+            "planning_quality",
+            "trust_in_data",
+            "avg_adoption",
+            "alternative_task_switches",
+            "failed_task_switches",
+            "supervisor_recovery_interventions",
+        ]
+        available_compare_metrics = [m for m in preferred_compare_metrics if m in df_all_final.columns]
         compare_metric = st.selectbox(
             "Comparison metric",
-            options=[
-                "avg_weekly_ppc",
-                "last_completed_weekly_ppc",
-                "open_schedule_backlog",
-                "cumulative_plan_failures",
-                "project_delay_days",
-                "avg_sa",
-                "day",
-                "avg_recovery_time",
-                "total_idle_time",
-                "total_idle_time_external",
-                "firefighting_ratio",
-                "planning_quality",
-                "trust_in_data",
-                "avg_adoption",
-                "alternative_task_switches",
-                "failed_task_switches",
-                "supervisor_recovery_interventions",
-            ],
-            format_func=lambda x: x.replace("_", " "),
+            options=available_compare_metrics,
+            format_func=friendly_metric_name,
         )
 
         fig_cmp = go.Figure()
@@ -1026,8 +1138,8 @@ with tab_compare:
                 )
             )
         fig_cmp.update_layout(
-            title=f"{compare_metric.replace('_', ' ')} — all scenarios",
-            yaxis_title=compare_metric,
+            title=f"{friendly_metric_name(compare_metric)} — all scenarios",
+            yaxis_title=friendly_metric_name(compare_metric),
             **PLOTLY_LAYOUT,
         )
         st.plotly_chart(fig_cmp, use_container_width=True)
@@ -1048,7 +1160,7 @@ with tab_compare:
                 "avg_recovery_time",
                 "idle_time_due_to_external_disruptions",
             ],
-            format_func=lambda x: x.replace("_", " "),
+            format_func=friendly_metric_name,
             key="ts_cmp",
         )
         st.plotly_chart(

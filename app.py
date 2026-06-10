@@ -87,6 +87,8 @@ PLOTLY_LAYOUT = dict(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
 )
 
+APP_DATA_VERSION = "v24_1_weekly_ppc_backlog"
+
 
 # ── Helper functions ───────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
@@ -175,6 +177,7 @@ def build_compare_excel(
 
 @st.cache_data(show_spinner=False)
 def cached_run_single(
+    app_data_version: str,
     scenario_name: str,
     runs: int,
     max_days: int,
@@ -254,10 +257,23 @@ def line_mean_by_day(
     color: str,
     y_title: str | None = None,
 ) -> go.Figure:
+    fig = go.Figure()
+    if df.empty or "day" not in df.columns or metric not in df.columns:
+        fig.update_layout(
+            title=title,
+            xaxis_title="Day",
+            yaxis_title=y_title or metric,
+            **PLOTLY_LAYOUT,
+        )
+        fig.add_annotation(
+            text=f"Metric not available in the current simulation data: {metric}",
+            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+        )
+        return fig
+
     agg = df.groupby("day", observed=True)[metric].agg(["mean", "std"]).reset_index()
     agg["std"] = agg["std"].fillna(0)
 
-    fig = go.Figure()
     fig.add_trace(
         go.Scatter(
             x=pd.concat([agg["day"], agg["day"][::-1]]),
@@ -313,6 +329,41 @@ def minmax(series: pd.Series, invert: bool = False) -> pd.Series:
         out = (s - s.min()) / denom
     return 1 - out if invert else out
 
+
+
+def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add safe fallback columns so old cached/partial simulation data does not crash the UI."""
+    if df is None or df.empty:
+        return df
+    df = df.copy()
+
+    if "avg_weekly_ppc" not in df.columns:
+        if "weekly_ppc" in df.columns:
+            df["avg_weekly_ppc"] = df["weekly_ppc"]
+        elif "ppc_proxy" in df.columns:
+            df["avg_weekly_ppc"] = df["ppc_proxy"]
+        else:
+            df["avg_weekly_ppc"] = 0.0
+
+    if "weekly_ppc" not in df.columns:
+        df["weekly_ppc"] = df["avg_weekly_ppc"]
+
+    fallback_zero_cols = [
+        "last_completed_weekly_ppc",
+        "planned_tasks_this_week",
+        "completed_on_plan_this_week",
+        "weekly_carryover",
+        "open_schedule_backlog",
+        "cumulative_plan_failures",
+        "project_delay_days",
+        "avg_lateness_days",
+        "late_completed_tasks",
+    ]
+    for col in fallback_zero_cols:
+        if col not in df.columns:
+            df[col] = 0.0
+
+    return df
 
 # ── Load scenarios ─────────────────────────────────────────────────────────────
 try:
@@ -412,6 +463,7 @@ with st.sidebar:
 
 # ── Session state and simulation run ───────────────────────────────────────────
 cache_key = (
+    APP_DATA_VERSION,
     selected_scenario_name,
     runs,
     max_days,
@@ -449,6 +501,8 @@ if st.session_state["single_result"] is None:
     st.stop()
 
 df_ts, df_final = st.session_state["single_result"]
+df_ts = ensure_v24_columns(df_ts)
+df_final = ensure_v24_columns(df_final)
 
 color = scenario_color(selected_scenario_name)
 label = scenario_label(selected_scenario_name)

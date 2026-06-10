@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v24_3_language_layout_ppc_guard"
+APP_DATA_VERSION = "v24_4_supervisor_base_workload"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -283,6 +283,11 @@ FRIENDLY_METRIC_NAMES = {
     "avg_adoption": "Average adoption",
     "avg_effective_use": "Average effective DVM use",
     "supervisor_utilization": "Supervisor utilization",
+    "supervisor_base_workload": "Supervisor base workload",
+    "supervisor_total_workload": "Supervisor total workload",
+    "supervisor_planning_shortfall": "Supervisor planning shortfall",
+    "cumulative_base_workload": "Cumulative base workload",
+    "cumulative_planning_shortfall": "Cumulative planning shortfall",
     "supervisor_backlog": "Supervisor backlog",
     "cumulative_reactive_time": "Cumulative reactive supervisor time",
     "cumulative_planning_time": "Cumulative planning time",
@@ -425,6 +430,13 @@ def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
         "project_delay_days",
         "avg_lateness_days",
         "late_completed_tasks",
+        "supervisor_base_workload",
+        "supervisor_total_workload",
+        "supervisor_planning_need",
+        "supervisor_planning_shortfall",
+        "supervisor_available_planning_capacity",
+        "cumulative_base_workload",
+        "cumulative_planning_shortfall",
     ]
     for col in fallback_zero_cols:
         if col not in df.columns:
@@ -784,6 +796,8 @@ with tab_timeseries:
         "avg_adoption",
         "avg_effective_use",
         "supervisor_utilization",
+        "supervisor_base_workload",
+        "supervisor_planning_shortfall",
         "firefighting_ratio",
         "total_idle_time",
         "total_idle_time_external",
@@ -964,41 +978,69 @@ with tab_disruptions:
 with tab_supervisor:
     st.markdown(f"### {label} — supervisor workload")
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Firefighting ratio", f"{display_metric(df_final, 'firefighting_ratio'):.1%}")
     c2.metric("Supervisor utilization", f"{display_metric(df_final, 'supervisor_utilization'):.1%}")
-    c3.metric("Unresolved questions", f"{display_metric(df_final, 'cumulative_unresolved_questions'):.1f}")
-    c4.metric("Backlog", f"{display_metric(df_final, 'supervisor_backlog'):.2f} h")
+    c3.metric("Base workload", f"{display_metric(df_final, 'supervisor_base_workload'):.1f} h/d")
+    c4.metric("Planning shortfall", f"{display_metric(df_final, 'cumulative_planning_shortfall'):.1f} h")
+    c5.metric("Backlog", f"{display_metric(df_final, 'supervisor_backlog'):.2f} h")
 
     st.divider()
 
     col_a, col_b = st.columns(2)
 
     with col_a:
-        sup_agg = df_ts.groupby("day", observed=True)[
-            ["cumulative_reactive_time", "cumulative_planning_time"]
-        ].mean().reset_index()
+        supervisor_time_cols = [
+            "cumulative_base_workload",
+            "cumulative_reactive_time",
+            "cumulative_planning_time",
+            "cumulative_planning_shortfall",
+        ]
+        available_time_cols = [c for c in supervisor_time_cols if c in df_ts.columns]
+        sup_agg = df_ts.groupby("day", observed=True)[available_time_cols].mean().reset_index()
         fig_sup = go.Figure()
-        fig_sup.add_trace(
-            go.Scatter(
-                x=sup_agg["day"],
-                y=sup_agg["cumulative_reactive_time"],
-                name="Reactive time",
-                mode="lines",
-                line=dict(color="#D85A30", width=2),
+        if "cumulative_base_workload" in sup_agg.columns:
+            fig_sup.add_trace(
+                go.Scatter(
+                    x=sup_agg["day"],
+                    y=sup_agg["cumulative_base_workload"],
+                    name="Base workload",
+                    mode="lines",
+                    line=dict(color="#888780", width=2),
+                )
             )
-        )
-        fig_sup.add_trace(
-            go.Scatter(
-                x=sup_agg["day"],
-                y=sup_agg["cumulative_planning_time"],
-                name="Planning time",
-                mode="lines",
-                line=dict(color="#1D9E75", width=2),
+        if "cumulative_reactive_time" in sup_agg.columns:
+            fig_sup.add_trace(
+                go.Scatter(
+                    x=sup_agg["day"],
+                    y=sup_agg["cumulative_reactive_time"],
+                    name="Reactive time",
+                    mode="lines",
+                    line=dict(color="#D85A30", width=2),
+                )
             )
-        )
+        if "cumulative_planning_time" in sup_agg.columns:
+            fig_sup.add_trace(
+                go.Scatter(
+                    x=sup_agg["day"],
+                    y=sup_agg["cumulative_planning_time"],
+                    name="Planning time",
+                    mode="lines",
+                    line=dict(color="#1D9E75", width=2),
+                )
+            )
+        if "cumulative_planning_shortfall" in sup_agg.columns:
+            fig_sup.add_trace(
+                go.Scatter(
+                    x=sup_agg["day"],
+                    y=sup_agg["cumulative_planning_shortfall"],
+                    name="Planning shortfall",
+                    mode="lines",
+                    line=dict(color="#BA7517", width=2, dash="dash"),
+                )
+            )
         fig_sup.update_layout(
-            title="Cumulative supervisor time",
+            title="Cumulative supervisor workload",
             xaxis_title="Day",
             yaxis_title="Hours",
             **PLOTLY_LAYOUT,

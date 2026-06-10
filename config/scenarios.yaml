@@ -1,5 +1,5 @@
 # DVM-ABM scenario configuration
-# v24.4 values: weekly PPC, schedule backlog, ready work area logic and supervisor base workload.
+# v24.5 values: weekly PPC, supervisor base workload, beta workload curve and variable crew resources.
 
 scenarios:
   analog_vm:
@@ -8,77 +8,76 @@ scenarios:
     data_timeliness: 0.28
     data_completeness: 0.38
     integration_level: 0.18
-
     readiness_visibility: 0.18
     material_visibility: 0.18
     congestion_visibility: 0.08
     priority_visibility: 0.38
     task_recommendation_quality: 0.05
-
     crew_access: 0.22
     management_access: 0.35
     visual_clarity: 0.45
     task_relevance: 0.35
-
-    initial_trust_in_data: 0.60
+    initial_trust_in_data: 0.6
     initial_trust_in_management: 0.55
     autonomy_level: 0.25
-    decision_centralization: 0.80
+    decision_centralization: 0.8
     reporting_burden: 0.18
-    perceived_surveillance: 0.20
-    compliance_pressure: 0.10
-
+    perceived_surveillance: 0.2
+    compliance_pressure: 0.1
     disturbance_probability: 0.24
-    initial_plan_reliability: 0.50
-
+    initial_plan_reliability: 0.5
     external_disruption_rate: 0.045
-    external_disruption_severity: 1.00
-    material_shortage_share: 0.30
+    external_disruption_severity: 1.0
+    material_shortage_share: 0.3
     logistics_delay_share: 0.22
     lifting_delay_share: 0.16
     design_missing_share: 0.14
-    equipment_unavailable_share: 0.10
+    equipment_unavailable_share: 0.1
     weather_condition_share: 0.08
-
     learning_rate: 0.005
-    trust_sensitivity: 0.010
-    adoption_sensitivity: 0.010
-
+    trust_sensitivity: 0.01
+    adoption_sensitivity: 0.01
     supervisor_capacity: 8.0
-    question_handling_time: 0.30
-    escalation_handling_time: 0.90
-    reporting_time_base: 0.60
-    coordination_task_time: 0.50
-    supervisor_base_workload: 1.60
+    question_handling_time: 0.3
+    escalation_handling_time: 0.9
+    reporting_time_base: 0.6
+    coordination_task_time: 0.5
+    supervisor_base_workload: 1.6
     management_reporting_load: 0.65
     procurement_admin_load: 0.65
     authority_reporting_load: 0.35
     meeting_load: 0.75
-    admin_variability: 0.30
-    planning_need_per_day: 2.20
+    admin_variability: 0.3
+    planning_need_per_day: 2.2
     proactive_planning_effect: 0.006
     overload_delay_effect: 0.12
     planning_decay: 0.007
     initial_planning_quality: 0.48
-
+    workload_shape: balanced_beta
+    workload_alpha: 2.4
+    workload_beta: 2.3
+    resource_shape: under_resourced_peak
+    resource_alpha: 2.1
+    resource_beta: 2.2
+    min_active_crews: 2
+    max_active_crews: 7
+    peak_underresource_factor: 0.72
+    workload_pressure_sensitivity: 0.75
   management_dashboard:
     capture_rate: 0.64
     data_accuracy: 0.79
-    data_timeliness: 0.70
+    data_timeliness: 0.7
     data_completeness: 0.74
     integration_level: 0.72
-
     readiness_visibility: 0.56
     material_visibility: 0.52
     congestion_visibility: 0.45
     priority_visibility: 0.84
     task_recommendation_quality: 0.46
-
     crew_access: 0.25
     management_access: 0.92
     visual_clarity: 0.62
     task_relevance: 0.45
-
     initial_trust_in_data: 0.56
     initial_trust_in_management: 0.47
     autonomy_level: 0.22
@@ -86,58 +85,60 @@ scenarios:
     reporting_burden: 0.68
     perceived_surveillance: 0.56
     compliance_pressure: 0.75
-
     disturbance_probability: 0.24
     initial_plan_reliability: 0.55
-
     external_disruption_rate: 0.045
-    external_disruption_severity: 1.00
-    material_shortage_share: 0.30
+    external_disruption_severity: 1.0
+    material_shortage_share: 0.3
     logistics_delay_share: 0.22
     lifting_delay_share: 0.16
     design_missing_share: 0.14
-    equipment_unavailable_share: 0.10
+    equipment_unavailable_share: 0.1
     weather_condition_share: 0.08
-
     learning_rate: 0.005
     trust_sensitivity: 0.018
     adoption_sensitivity: 0.018
-
     supervisor_capacity: 8.0
     question_handling_time: 0.32
-    escalation_handling_time: 1.00
+    escalation_handling_time: 1.0
     reporting_time_base: 1.25
-    coordination_task_time: 0.50
-    supervisor_base_workload: 1.50
-    management_reporting_load: 0.90
+    coordination_task_time: 0.5
+    supervisor_base_workload: 1.5
+    management_reporting_load: 0.9
     procurement_admin_load: 0.55
     authority_reporting_load: 0.35
-    meeting_load: 0.80
+    meeting_load: 0.8
     admin_variability: 0.28
     planning_need_per_day: 2.25
     proactive_planning_effect: 0.005
     overload_delay_effect: 0.16
     planning_decay: 0.008
     initial_planning_quality: 0.52
-
+    workload_shape: balanced_beta
+    workload_alpha: 2.4
+    workload_beta: 2.3
+    resource_shape: under_resourced_peak
+    resource_alpha: 2.1
+    resource_beta: 2.2
+    min_active_crews: 2
+    max_active_crews: 7
+    peak_underresource_factor: 0.76
+    workload_pressure_sensitivity: 0.7
   forced_reporting_dvm:
     capture_rate: 0.64
     data_accuracy: 0.75
     data_timeliness: 0.58
     data_completeness: 0.68
-    integration_level: 0.60
-
+    integration_level: 0.6
     readiness_visibility: 0.58
     material_visibility: 0.52
     congestion_visibility: 0.48
     priority_visibility: 0.75
     task_recommendation_quality: 0.42
-
     crew_access: 0.23
     management_access: 0.88
     visual_clarity: 0.52
     task_relevance: 0.42
-
     initial_trust_in_data: 0.45
     initial_trust_in_management: 0.36
     autonomy_level: 0.18
@@ -145,154 +146,164 @@ scenarios:
     reporting_burden: 0.88
     perceived_surveillance: 0.82
     compliance_pressure: 0.95
-
     disturbance_probability: 0.25
     initial_plan_reliability: 0.55
-
     external_disruption_rate: 0.045
-    external_disruption_severity: 1.00
-    material_shortage_share: 0.30
+    external_disruption_severity: 1.0
+    material_shortage_share: 0.3
     logistics_delay_share: 0.22
     lifting_delay_share: 0.16
     design_missing_share: 0.14
-    equipment_unavailable_share: 0.10
+    equipment_unavailable_share: 0.1
     weather_condition_share: 0.08
-
     learning_rate: 0.002
     trust_sensitivity: 0.024
     adoption_sensitivity: 0.026
-
     supervisor_capacity: 8.0
     question_handling_time: 0.35
-    escalation_handling_time: 1.10
-    reporting_time_base: 1.60
+    escalation_handling_time: 1.1
+    reporting_time_base: 1.6
     coordination_task_time: 0.55
-    supervisor_base_workload: 1.70
+    supervisor_base_workload: 1.7
     management_reporting_load: 1.25
     procurement_admin_load: 0.65
-    authority_reporting_load: 0.40
+    authority_reporting_load: 0.4
     meeting_load: 0.85
     admin_variability: 0.35
-    planning_need_per_day: 2.30
+    planning_need_per_day: 2.3
     proactive_planning_effect: 0.004
-    overload_delay_effect: 0.20
-    planning_decay: 0.010
+    overload_delay_effect: 0.2
+    planning_decay: 0.01
     initial_planning_quality: 0.46
-
+    workload_shape: balanced_beta
+    workload_alpha: 2.4
+    workload_beta: 2.3
+    resource_shape: under_resourced_peak
+    resource_alpha: 2.1
+    resource_beta: 2.2
+    min_active_crews: 2
+    max_active_crews: 7
+    peak_underresource_factor: 0.7
+    workload_pressure_sensitivity: 0.82
   workface_dvm:
     capture_rate: 0.72
     data_accuracy: 0.82
     data_timeliness: 0.78
     data_completeness: 0.78
     integration_level: 0.72
-
     readiness_visibility: 0.86
-    material_visibility: 0.80
+    material_visibility: 0.8
     congestion_visibility: 0.78
     priority_visibility: 0.68
     task_recommendation_quality: 0.76
-
     crew_access: 0.78
-    management_access: 0.70
+    management_access: 0.7
     visual_clarity: 0.73
-    task_relevance: 0.80
-
+    task_relevance: 0.8
     initial_trust_in_data: 0.66
     initial_trust_in_management: 0.62
     autonomy_level: 0.58
     decision_centralization: 0.45
     reporting_burden: 0.38
-    perceived_surveillance: 0.30
+    perceived_surveillance: 0.3
     compliance_pressure: 0.35
-
     disturbance_probability: 0.22
-    initial_plan_reliability: 0.60
-
+    initial_plan_reliability: 0.6
     external_disruption_rate: 0.045
-    external_disruption_severity: 1.00
-    material_shortage_share: 0.30
+    external_disruption_severity: 1.0
+    material_shortage_share: 0.3
     logistics_delay_share: 0.22
     lifting_delay_share: 0.16
     design_missing_share: 0.14
-    equipment_unavailable_share: 0.10
+    equipment_unavailable_share: 0.1
     weather_condition_share: 0.08
-
     learning_rate: 0.012
     trust_sensitivity: 0.014
     adoption_sensitivity: 0.028
-
     supervisor_capacity: 8.0
     question_handling_time: 0.28
     escalation_handling_time: 0.85
-    reporting_time_base: 0.80
+    reporting_time_base: 0.8
     coordination_task_time: 0.45
     supervisor_base_workload: 1.35
-    management_reporting_load: 0.60
+    management_reporting_load: 0.6
     procurement_admin_load: 0.48
-    authority_reporting_load: 0.30
+    authority_reporting_load: 0.3
     meeting_load: 0.65
     admin_variability: 0.24
-    planning_need_per_day: 2.20
+    planning_need_per_day: 2.2
     proactive_planning_effect: 0.007
     overload_delay_effect: 0.12
     planning_decay: 0.006
     initial_planning_quality: 0.58
-
+    workload_shape: balanced_beta
+    workload_alpha: 2.4
+    workload_beta: 2.3
+    resource_shape: follows_workload
+    resource_alpha: 2.2
+    resource_beta: 2.2
+    min_active_crews: 2
+    max_active_crews: 8
+    peak_underresource_factor: 0.86
+    workload_pressure_sensitivity: 0.56
   dvm_lean_autonomous:
     capture_rate: 0.84
-    data_accuracy: 0.90
+    data_accuracy: 0.9
     data_timeliness: 0.88
     data_completeness: 0.87
     integration_level: 0.88
-
     readiness_visibility: 0.93
     material_visibility: 0.88
     congestion_visibility: 0.88
     priority_visibility: 0.82
     task_recommendation_quality: 0.88
-
     crew_access: 0.88
     management_access: 0.82
     visual_clarity: 0.84
     task_relevance: 0.88
-
     initial_trust_in_data: 0.78
     initial_trust_in_management: 0.75
     autonomy_level: 0.74
     decision_centralization: 0.32
     reporting_burden: 0.28
     perceived_surveillance: 0.18
-    compliance_pressure: 0.30
-
+    compliance_pressure: 0.3
     disturbance_probability: 0.19
     initial_plan_reliability: 0.65
-
     external_disruption_rate: 0.045
-    external_disruption_severity: 1.00
-    material_shortage_share: 0.30
+    external_disruption_severity: 1.0
+    material_shortage_share: 0.3
     logistics_delay_share: 0.22
     lifting_delay_share: 0.16
     design_missing_share: 0.14
-    equipment_unavailable_share: 0.10
+    equipment_unavailable_share: 0.1
     weather_condition_share: 0.08
-
     learning_rate: 0.018
     trust_sensitivity: 0.012
     adoption_sensitivity: 0.038
-
     supervisor_capacity: 8.0
     question_handling_time: 0.25
     escalation_handling_time: 0.75
     reporting_time_base: 0.65
-    coordination_task_time: 0.40
-    supervisor_base_workload: 1.20
+    coordination_task_time: 0.4
+    supervisor_base_workload: 1.2
     management_reporting_load: 0.45
-    procurement_admin_load: 0.40
+    procurement_admin_load: 0.4
     authority_reporting_load: 0.28
     meeting_load: 0.55
-    admin_variability: 0.20
-    planning_need_per_day: 2.10
+    admin_variability: 0.2
+    planning_need_per_day: 2.1
     proactive_planning_effect: 0.008
-    overload_delay_effect: 0.10
+    overload_delay_effect: 0.1
     planning_decay: 0.005
     initial_planning_quality: 0.65
+    workload_shape: balanced_beta
+    workload_alpha: 2.4
+    workload_beta: 2.3
+    resource_shape: follows_workload
+    resource_alpha: 2.3
+    resource_beta: 2.2
+    min_active_crews: 2
+    max_active_crews: 8
+    peak_underresource_factor: 0.94
+    workload_pressure_sensitivity: 0.45

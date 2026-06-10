@@ -1,5 +1,5 @@
 # DVM-ABM scenario configuration
-# These values mirror the current v2.3 Mesa prototype defaults.
+# v24.4 values: weekly PPC, schedule backlog, ready work area logic and supervisor base workload.
 
 scenarios:
   analog_vm:
@@ -49,6 +49,13 @@ scenarios:
     escalation_handling_time: 0.90
     reporting_time_base: 0.60
     coordination_task_time: 0.50
+    supervisor_base_workload: 1.60
+    management_reporting_load: 0.65
+    procurement_admin_load: 0.65
+    authority_reporting_load: 0.35
+    meeting_load: 0.75
+    admin_variability: 0.30
+    planning_need_per_day: 2.20
     proactive_planning_effect: 0.006
     overload_delay_effect: 0.12
     planning_decay: 0.007
@@ -101,6 +108,13 @@ scenarios:
     escalation_handling_time: 1.00
     reporting_time_base: 1.25
     coordination_task_time: 0.50
+    supervisor_base_workload: 1.50
+    management_reporting_load: 0.90
+    procurement_admin_load: 0.55
+    authority_reporting_load: 0.35
+    meeting_load: 0.80
+    admin_variability: 0.28
+    planning_need_per_day: 2.25
     proactive_planning_effect: 0.005
     overload_delay_effect: 0.16
     planning_decay: 0.008
@@ -153,6 +167,13 @@ scenarios:
     escalation_handling_time: 1.10
     reporting_time_base: 1.60
     coordination_task_time: 0.55
+    supervisor_base_workload: 1.70
+    management_reporting_load: 1.25
+    procurement_admin_load: 0.65
+    authority_reporting_load: 0.40
+    meeting_load: 0.85
+    admin_variability: 0.35
+    planning_need_per_day: 2.30
     proactive_planning_effect: 0.004
     overload_delay_effect: 0.20
     planning_decay: 0.010
@@ -205,6 +226,13 @@ scenarios:
     escalation_handling_time: 0.85
     reporting_time_base: 0.80
     coordination_task_time: 0.45
+    supervisor_base_workload: 1.35
+    management_reporting_load: 0.60
+    procurement_admin_load: 0.48
+    authority_reporting_load: 0.30
+    meeting_load: 0.65
+    admin_variability: 0.24
+    planning_need_per_day: 2.20
     proactive_planning_effect: 0.007
     overload_delay_effect: 0.12
     planning_decay: 0.006
@@ -257,6 +285,13 @@ scenarios:
     escalation_handling_time: 0.75
     reporting_time_base: 0.65
     coordination_task_time: 0.40
+    supervisor_base_workload: 1.20
+    management_reporting_load: 0.45
+    procurement_admin_load: 0.40
+    authority_reporting_load: 0.28
+    meeting_load: 0.55
+    admin_variability: 0.20
+    planning_need_per_day: 2.10
     proactive_planning_effect: 0.008
     overload_delay_effect: 0.10
     planning_decay: 0.005

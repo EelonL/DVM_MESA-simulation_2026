@@ -66,6 +66,20 @@ class Scenario:
     disturbance_probability: float
     initial_plan_reliability: float
 
+    # Project workload and resource curves.
+    # Workload curve shapes scheduled task starts over project time.
+    # Resource curve shapes how many crews are active during the project.
+    workload_shape: str
+    workload_alpha: float
+    workload_beta: float
+    resource_shape: str
+    resource_alpha: float
+    resource_beta: float
+    min_active_crews: int
+    max_active_crews: int
+    peak_underresource_factor: float
+    workload_pressure_sensitivity: float
+
     # External variability parameters.
     # In the v2.3 model, the base shock schedule is controlled per run.
     # These fields are still retained for compatibility and future experiments.

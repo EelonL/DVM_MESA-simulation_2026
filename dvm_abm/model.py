@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import random
+import math
 from statistics import pstdev
 from mesa import Model, DataCollector
 from .agents import CrewAgent, SupervisorAgent, TaskAgent, TaskStatus
@@ -31,17 +32,92 @@ class DVMConstructionModel(Model):
         self.daily_questions=0; self.daily_escalations=0; self.daily_coordination_needs=0; self.daily_recovery_interventions=0; self.daily_external_pressure=0; self.daily_useful=0; self.daily_harmful=0
         self.week_length=5; self.current_picture=SituationPicture(0,0,0,0,0,0,0); self.trades=["drywall","mep","finishes","carpentry"]
         self.shock_schedule=generate_external_shock_schedule(seed,self.trades,max_days+40,daily_shock_probability)
+        self.planned_workload_by_day=[0 for _ in range(max_days+1)]
+        self.resource_capacity_by_day=[0.0 for _ in range(max_days+1)]
+        self.active_crews_today=0
+        self.available_crew_capacity_today=0.0
+        self.planned_workload_today=0.0
+        self.workload_pressure=0.0
         self.tasks=[]; self.crews=[]; self._create_project(number_of_tasks)
+        self._build_workload_and_resource_curves()
         self.planned_project_finish=max((self._planned_finish(t) for t in self.tasks), default=0.0)
         self.datacollector=DataCollector(model_reporters=self._reporters()); self.datacollector.collect(self)
+    def _sample_workload_ratio(self):
+        """Sample a planned task timing ratio in [0, 1] from the workload curve."""
+        s=self.dvm_scenario; r=self.py_random
+        shape=getattr(s,"workload_shape","balanced_beta")
+        if shape=="front_loaded":
+            return r.betavariate(1.8,3.4)
+        if shape=="back_loaded":
+            return r.betavariate(3.4,1.8)
+        return r.betavariate(max(.2,getattr(s,"workload_alpha",2.4)),max(.2,getattr(s,"workload_beta",2.3)))
+
+    def _beta_shape_value(self,x,alpha,beta):
+        """Unnormalised beta-like curve value. Avoids SciPy dependency."""
+        x=clamp_range(float(x),.001,.999)
+        return (x**(alpha-1))*((1-x)**(beta-1))
+
+    def _curve_values(self,days,alpha,beta):
+        raw=[self._beta_shape_value((d+.5)/max(1,days),alpha,beta) for d in range(days)]
+        mx=max(raw) if raw else 1.0
+        return [v/mx for v in raw]
+
+    def _build_workload_and_resource_curves(self):
+        """Build planned workload and daily active crew resource curves."""
+        s=self.dvm_scenario
+        days=max(1,self.max_days)
+        self.planned_workload_by_day=[0 for _ in range(days+1)]
+        for t in self.tasks:
+            pf=int(clamp_range(self._planned_finish(t),0,days))
+            self.planned_workload_by_day[pf]+=1
+
+        shape=getattr(s,"resource_shape","under_resourced_peak")
+        min_crews=max(1,int(getattr(s,"min_active_crews",2)))
+        max_crews=max(min_crews,int(getattr(s,"max_active_crews",len(self.crews))))
+        under=clamp_range(float(getattr(s,"peak_underresource_factor",.8)),.2,1.2)
+        alpha=max(.2,float(getattr(s,"resource_alpha",2.2)))
+        beta=max(.2,float(getattr(s,"resource_beta",2.2)))
+        curve=self._curve_values(days,alpha,beta)
+
+        # Scale curve to crew counts. Under-resourced peak means the resource peak
+        # intentionally stays below the workload peak.
+        resource=[]
+        for d,v in enumerate(curve):
+            if shape=="constant_crews":
+                crews=max_crews
+            elif shape=="follows_workload":
+                crews=round(min_crews+(max_crews-min_crews)*clamp_range(v*under,.0,1.0))
+            else:
+                crews=round(min_crews+(max_crews-min_crews)*clamp_range(v*under,.0,1.0))
+            resource.append(clamp_range(crews,min_crews,max_crews))
+        self.resource_capacity_by_day=resource+[resource[-1] if resource else min_crews]
+
+    def _update_daily_load_state(self):
+        day_index=int(clamp_range(self.day,0,len(self.resource_capacity_by_day)-1))
+        self.active_crews_today=int(self.resource_capacity_by_day[day_index])
+        self.available_crew_capacity_today=float(self.active_crews_today)
+        self.planned_workload_today=float(self.planned_workload_by_day[day_index]) if day_index<len(self.planned_workload_by_day) else 0.0
+        weekly_due=len(self._planned_in_week(self.current_week))
+        weekly_capacity=max(1.0,self.active_crews_today*self.week_length)
+        self.workload_pressure=clamp_range((weekly_due/weekly_capacity)-1.0,0.0,2.0)
+
     def _create_project(self,n):
         r=self.py_random
         for i in range(n):
             pred=[r.randrange(max(1,i-10),i)] if i>6 and r.random()<.6 else []
-            t=TaskAgent(self,i,r.choice(self.trades),r.randrange(12),r.randrange(42),r.randint(1,5),r.uniform(.2,1),r.uniform(.35,1),pred); self.tasks.append(t)
-        for i,tr in enumerate(["drywall","mep","finishes","carpentry","drywall","mep"]):
+            # Planned task timing follows the project workload curve instead of a flat random distribution.
+            start_ratio=self._sample_workload_ratio()
+            planned_start=int(start_ratio*max(1,self.max_days*.82))
+            planned_duration=r.randint(1,5)
+            t=TaskAgent(self,i,r.choice(self.trades),r.randrange(12),planned_start,planned_duration,r.uniform(.2,1),r.uniform(.35,1),pred); self.tasks.append(t)
+        # Create the maximum potential crew pool. Daily resource curve decides how many are active.
+        crew_pool=[]
+        max_crews=max(1,int(getattr(self.dvm_scenario,"max_active_crews",8)))
+        while len(crew_pool)<max_crews:
+            crew_pool.extend(["drywall","mep","finishes","carpentry"])
+        for i,tr in enumerate(crew_pool[:max_crews]):
             ad=clamp(.35+.48*self.dvm_scenario.crew_access-.18*self.dvm_scenario.reporting_burden+r.normalvariate(0,.08)); comp=clamp(self.dvm_scenario.compliance_pressure*(.45+.45*self.dvm_scenario.management_access))
-            self.crews.append(CrewAgent(self,1000+i,tr,[0,2,4,6,8,10][i],clamp(r.normalvariate(.6,.15)),clamp(r.normalvariate(.5+.25*self.dvm_scenario.crew_access,.15)),clamp_range(r.normalvariate(1,.1),.75,1.25),ad,comp))
+            self.crews.append(CrewAgent(self,1000+i,tr,(2*i)%12,clamp(r.normalvariate(.6,.15)),clamp(r.normalvariate(.5+.25*self.dvm_scenario.crew_access,.15)),clamp_range(r.normalvariate(1,.1),.75,1.25),ad,comp))
         self.supervisor=SupervisorAgent(
             self,
             9000,
@@ -65,6 +141,10 @@ class DVMConstructionModel(Model):
             "week": lambda m: m.current_week,
             "completed_tasks": lambda m: sum(t.is_done for t in m.tasks),
             "total_tasks": lambda m: len(m.tasks),
+            "planned_workload_today": lambda m: m.planned_workload_today,
+            "active_crews_today": lambda m: m.active_crews_today,
+            "available_crew_capacity_today": lambda m: m.available_crew_capacity_today,
+            "workload_pressure": lambda m: m.workload_pressure,
             "planned_tasks_this_week": lambda m: m.planned_tasks_this_week,
             "completed_on_plan_this_week": lambda m: m.completed_on_plan_this_week,
             "weekly_ppc": lambda m: m.weekly_ppc,
@@ -94,8 +174,10 @@ class DVMConstructionModel(Model):
             "avg_adoption": lambda m: safe_mean([c.adoption for c in m.crews]),
             "avg_effective_use": lambda m: safe_mean([c.effective_use() for c in m.crews]),
             "workface_picture_quality": lambda m: m.current_picture.workface_quality,
+            "ready_work_area_picture_quality": lambda m: m.current_picture.workface_quality,
             "management_picture_quality": lambda m: m.current_picture.management_quality,
             "workface_gap": lambda m: m.current_picture.workface_gap,
+            "ready_work_area_gap": lambda m: m.current_picture.workface_gap,
             "total_idle_time": lambda m: sum(c.idle_time for c in m.crews),
             "total_idle_time_external": lambda m: sum(c.idle_time_external for c in m.crews),
             "total_working_time": lambda m: sum(c.working_time for c in m.crews),
@@ -266,8 +348,9 @@ class DVMConstructionModel(Model):
 
     def step(self):
         self.daily_questions=self.daily_escalations=self.daily_coordination_needs=self.daily_recovery_interventions=0; self.daily_external_pressure=0; self.daily_useful=0; self.daily_harmful=0
+        self._update_daily_load_state()
         self._update_blockages(); self.current_picture=self._picture(); self._update_readiness()
-        for c in list(self.crews): c.step()
+        for c in list(self.crews[:self.active_crews_today]): c.step()
         self.daily_coordination_needs += self._baseline_coordination_needs()
         self.supervisor.process_day(self.daily_questions,self.daily_escalations,self.daily_coordination_needs,self.daily_recovery_interventions,self.daily_external_pressure)
         self._update_trust(); self.datacollector.collect(self); self.day+=1
@@ -289,6 +372,7 @@ class DVMConstructionModel(Model):
             + 0.70 * info_gap
             + 0.85 * s.decision_centralization
             + 0.65 * backlog_pressure
+            + getattr(s,"workload_pressure_sensitivity",.6)*self.workload_pressure
             - 0.55 * s.autonomy_level
             - 0.35 * self.planning_quality,
         )
@@ -317,6 +401,7 @@ class DVMConstructionModel(Model):
                 + .22*self.planning_quality
                 - .18*backlog_pressure
                 - .10*supervisor_pressure
+                - .10*getattr(s,"workload_pressure_sensitivity",.6)*self.workload_pressure
                 - .12*s.reporting_burden*(1-self.trust_in_management),
                 .04,.98
             )
@@ -331,7 +416,7 @@ class DVMConstructionModel(Model):
             shock=self._pop_shock(c.trade)
             if shock: self._external(cur,c,sa,shock); return
             if self.py_random.random()<self.dvm_scenario.disturbance_probability*(1-.4*self.planning_quality): cur.interruptions+=1; c.escalations+=1; self.daily_escalations+=1; c.idle_time+=1
-            backlog_penalty=clamp_range(1.0-.018*self.open_schedule_backlog-.025*self.supervisor.backlog,.55,1.0)
+            backlog_penalty=clamp_range(1.0-.018*self.open_schedule_backlog-.025*self.supervisor.backlog-.12*self.workload_pressure,.50,1.0)
             progress_factor=clamp_range(.72+.24*sa.comprehension+.20*self.planning_quality+.08*self.current_picture.readiness_quality-.10*self.dvm_scenario.reporting_burden,.45,1.35)
             cur.remaining_duration-=c.productivity*progress_factor*backlog_penalty; c.working_time+=1
             if cur.remaining_duration<=0: cur.status=TaskStatus.COMPLETED; cur.actual_finish=self.day; c.current_task_id=None
@@ -353,7 +438,8 @@ class DVMConstructionModel(Model):
             + .07*s.decision_centralization*(1-s.autonomy_level)
             + .05*s.reporting_burden*(1-self.trust_in_management)
             + .08*backlog_pressure
-            + .05*supervisor_pressure,
+            + .05*supervisor_pressure
+            + .07*getattr(s,"workload_pressure_sensitivity",.6)*self.workload_pressure,
             0,.75
         )
     def _task(self,i): return next((t for t in self.tasks if t.id==i),None) if i is not None else None
@@ -377,6 +463,7 @@ class DVMConstructionModel(Model):
             + .14*self.dvm_scenario.autonomy_level
             - .10*self.dvm_scenario.decision_centralization
             - .08*backlog_pressure
+            - .06*getattr(self.dvm_scenario,"workload_pressure_sensitivity",.6)*self.workload_pressure
         )
         if self.py_random.random()<p_alt:
             rec=self.py_random.uniform(.15,.8)*(1+.35*(1-sa.total)+.25*(1-self.planning_quality)); self.alternative_task_switches+=1; c.alternative_task_switches+=1; self.daily_useful+=1

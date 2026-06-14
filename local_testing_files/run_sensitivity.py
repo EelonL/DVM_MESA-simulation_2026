@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 import random
 import sys
+import time
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -49,18 +50,34 @@ DEFAULT_KEY_METRICS = [
     "avg_weekly_ppc",
     "last_completed_weekly_ppc",
     "open_schedule_backlog",
+    "mean_open_schedule_backlog",
+    "max_open_schedule_backlog",
     "cumulative_plan_failures",
     "avg_make_ready_score",
+    "mean_make_ready_score_over_project",
+    "min_make_ready_score_over_project",
     "cumulative_making_do_starts",
     "cumulative_rework_due_to_making_do",
     "supervisor_reactive_time",
     "firefighting_ratio",
+    "mean_firefighting_ratio",
+    "max_firefighting_ratio",
     "supervisor_backlog",
+    "mean_supervisor_backlog",
+    "max_supervisor_backlog",
+    "supervisor_count_today",
+    "effective_supervisor_capacity_today",
     "avg_sa",
     "trust_in_data",
     "trust_in_management",
     "avg_adoption",
     "idle_time_due_to_external_disruptions",
+    "idle_time_due_to_external_disruptions_hours_per_day",
+    "idle_time_due_to_external_disruptions_hours_per_active_crew_day",
+    "idle_time_hours_per_day",
+    "idle_time_hours_per_active_crew_day",
+    "external_idle_time_hours_per_day",
+    "external_idle_time_hours_per_active_crew_day",
     "alternative_task_switches",
 ]
 
@@ -190,9 +207,23 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                 "making_do_rework_factor": 0.60,
             },
         },
+        {
+            "name": "extreme_making_do",
+            "description": "Stress test: risky promises and very high making-do tendency should activate making-do metrics.",
+            "overrides": {
+                "make_ready_threshold": 0.95,
+                "constraint_screening_strength": 0.05,
+                "constraint_improvement_rate": 0.01,
+                "commitment_realism": 0.20,
+                "overcommitment_tendency": 0.90,
+                "making_do_tendency": 0.95,
+                "making_do_interruption_rate": 0.70,
+                "making_do_rework_factor": 0.80,
+            },
+        },
     ],
     "ofat": {
-        "enabled": True,
+        "enabled": False,
         "parameters": [
             "crew_access",
             "management_access",
@@ -221,12 +252,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "workload_pressure_sensitivity",
         ],
         "relative_levels": [-0.30, -0.15, 0.0, 0.15, 0.30],
-        "runs_per_case": 10,
+        "runs_per_case": 1,
     },
     "threshold_tests": {
-        "enabled": True,
-        "runs_per_case": 5,
-        "grid_values_01": [0.10, 0.30, 0.50, 0.70, 0.90],
+        "enabled": False,
+        "runs_per_case": 1,
+        "grid_values_01": [0.10, 0.50, 0.90],
         "tests": [
             {"name": "crew_access_x_management_access", "x": "crew_access", "y": "management_access"},
             {"name": "reporting_burden_x_autonomy", "x": "reporting_burden", "y": "autonomy_level"},
@@ -237,8 +268,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "screening": {
         "enabled": True,
-        "n_samples": 150,
-        "runs_per_sample": 3,
+        "n_samples": 20,
+        "runs_per_sample": 1,
         "parameters": [
             "crew_access",
             "management_access",
@@ -427,7 +458,11 @@ def run_one_case(
     if "days" not in sig.parameters and "max_days" in sig.parameters:
         kwargs["max_days"] = kwargs.pop("days")
 
+    run_started_at = datetime.now()
+    perf_start = time.perf_counter()
     df = analysis_mod.run_simulation(**kwargs)
+    run_duration_sec = time.perf_counter() - perf_start
+    run_finished_at = datetime.now()
     if not isinstance(df, pd.DataFrame):
         raise RuntimeError("run_simulation() did not return a pandas DataFrame")
 
@@ -444,6 +479,9 @@ def run_one_case(
     df["level"] = "" if level is None else level
     df["sample_id"] = "" if sample_id is None else sample_id
     df["seed"] = seed
+    df["run_started_at"] = run_started_at.isoformat(timespec="seconds")
+    df["run_finished_at"] = run_finished_at.isoformat(timespec="seconds")
+    df["run_duration_sec"] = run_duration_sec
 
     sort_cols = [c for c in ["day"] if c in df.columns]
     if sort_cols:
@@ -748,8 +786,15 @@ def screening_correlations(df: pd.DataFrame, cfg: Dict[str, Any], key_metrics: S
             for m in metrics:
                 if m not in sub.columns:
                     continue
-                corr = sub[p].rank().corr(sub[m].rank())
-                rows.append({"scenario": scenario, "parameter": p, "metric": m, "spearman_rank_corr": corr, "abs_corr": abs(corr) if pd.notna(corr) else math.nan})
+                x = sub[p].rank()
+                y = sub[m].rank()
+                if x.nunique(dropna=True) < 2 or y.nunique(dropna=True) < 2:
+                    corr = math.nan
+                    note = "constant_parameter_or_metric"
+                else:
+                    corr = x.corr(y)
+                    note = ""
+                rows.append({"scenario": scenario, "parameter": p, "metric": m, "spearman_rank_corr": corr, "abs_corr": abs(corr) if pd.notna(corr) else math.nan, "note": note})
     return pd.DataFrame(rows).sort_values(["metric", "abs_corr"], ascending=[True, False]) if rows else pd.DataFrame()
 
 
@@ -792,10 +837,18 @@ def export_excel(
     screening_df: pd.DataFrame,
     flags_df: pd.DataFrame,
     timeseries_df: Optional[pd.DataFrame],
+    batch_started_at: Optional[datetime] = None,
+    batch_finished_at: Optional[datetime] = None,
+    batch_duration_sec: Optional[float] = None,
 ):
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
         readme = pd.DataFrame([
             ["Created", datetime.now().isoformat(timespec="seconds")],
+            ["Batch started", "" if batch_started_at is None else batch_started_at.isoformat(timespec="seconds")],
+            ["Batch finished", "" if batch_finished_at is None else batch_finished_at.isoformat(timespec="seconds")],
+            ["Batch duration seconds", "" if batch_duration_sec is None else round(float(batch_duration_sec), 3)],
+            ["Batch duration minutes", "" if batch_duration_sec is None else round(float(batch_duration_sec)/60.0, 3)],
+            ["Mean model run duration seconds", "" if "run_duration_sec" not in final_df.columns else round(float(final_df["run_duration_sec"].mean()), 4)],
             ["Purpose", "Local sensitivity test results for DVM-ABM."],
             ["Interpretation", "Exploratory robustness analysis; not calibration or empirical validation by itself."],
             ["Rows in final_run_metrics", len(final_df)],
@@ -808,6 +861,9 @@ def export_excel(
         ofat_df.to_excel(writer, sheet_name="OFAT effects", index=False)
         screening_df.to_excel(writer, sheet_name="Screening corr", index=False)
         final_df.to_excel(writer, sheet_name="Final run metrics", index=False)
+        timing_cols=[c for c in ["test_mode","test_case","scenario","run","sample_id","seed","run_started_at","run_finished_at","run_duration_sec"] if c in final_df.columns]
+        if timing_cols:
+            final_df[timing_cols].to_excel(writer, sheet_name="Run timing", index=False)
         # Keep Excel reasonable: if large timeseries, save CSV instead.
         if timeseries_df is not None and len(timeseries_df) <= 500000:
             timeseries_df.to_excel(writer, sheet_name="Timeseries", index=False)
@@ -885,6 +941,203 @@ def write_csv_outputs(out_dir: Path, final_df: pd.DataFrame, summary_df: pd.Data
         timeseries_df.to_csv(out_dir / "timeseries.csv", index=False, encoding="utf-8-sig")
 
 
+
+
+# ---------------------------------------------------------------------------
+# Run-size presets and estimates
+# ---------------------------------------------------------------------------
+
+KEY_SCREENING_PARAMETERS = [
+    "crew_access",
+    "management_access",
+    "task_relevance",
+    "capture_rate",
+    "data_accuracy",
+    "data_timeliness",
+    "reporting_burden",
+    "perceived_surveillance",
+    "decision_centralization",
+    "autonomy_level",
+    "constraint_screening_strength",
+    "commitment_realism",
+    "overcommitment_tendency",
+    "making_do_tendency",
+    "supervisor_capacity",
+    "peak_underresource_factor",
+    "workload_pressure_sensitivity",
+]
+
+CORE_SCREENING_PARAMETERS = [
+    "crew_access",
+    "management_access",
+    "task_relevance",
+    "reporting_burden",
+    "perceived_surveillance",
+    "autonomy_level",
+    "constraint_screening_strength",
+    "commitment_realism",
+    "making_do_tendency",
+    "supervisor_capacity",
+]
+
+THRESHOLD_CORE_TESTS = [
+    {"name": "crew_access_x_management_access", "x": "crew_access", "y": "management_access"},
+    {"name": "reporting_burden_x_autonomy", "x": "reporting_burden", "y": "autonomy_level"},
+]
+
+
+def apply_preset(cfg: Dict[str, Any], preset: str) -> Dict[str, Any]:
+    """Apply a run-size preset. Use preset='config' to keep the YAML unchanged."""
+    preset = (preset or "smoke").lower()
+    out = copy.deepcopy(cfg)
+    if preset == "config":
+        return out
+
+    out.setdefault("general", {})["save_timeseries"] = False
+    out.setdefault("outputs", {})["make_plots"] = True
+
+    if preset == "smoke":
+        out["general"]["runs_per_case"] = 1
+        out.setdefault("ofat", {})["enabled"] = False
+        out.setdefault("threshold_tests", {})["enabled"] = False
+        out.setdefault("screening", {})["enabled"] = True
+        out["screening"]["n_samples"] = 10
+        out["screening"]["runs_per_sample"] = 1
+        out["screening"]["parameters"] = CORE_SCREENING_PARAMETERS
+
+    elif preset == "light":
+        out["general"]["runs_per_case"] = 2
+        out.setdefault("ofat", {})["enabled"] = True
+        out["ofat"]["runs_per_case"] = 1
+        out["ofat"]["relative_levels"] = [-0.30, 0.0, 0.30]
+        out["ofat"]["parameters"] = CORE_SCREENING_PARAMETERS
+        out.setdefault("threshold_tests", {})["enabled"] = False
+        out.setdefault("screening", {})["enabled"] = True
+        out["screening"]["n_samples"] = 40
+        out["screening"]["runs_per_sample"] = 1
+        out["screening"]["parameters"] = KEY_SCREENING_PARAMETERS
+
+    elif preset == "screening":
+        out["general"]["runs_per_case"] = 1
+        out.setdefault("ofat", {})["enabled"] = False
+        out.setdefault("threshold_tests", {})["enabled"] = False
+        out.setdefault("screening", {})["enabled"] = True
+        out["screening"]["n_samples"] = 40
+        out["screening"]["runs_per_sample"] = 1
+        out["screening"]["parameters"] = KEY_SCREENING_PARAMETERS
+
+    elif preset == "threshold":
+        out["general"]["runs_per_case"] = 1
+        out.setdefault("ofat", {})["enabled"] = False
+        out.setdefault("screening", {})["enabled"] = False
+        out.setdefault("threshold_tests", {})["enabled"] = True
+        out["threshold_tests"]["runs_per_case"] = 3
+        out["threshold_tests"]["grid_values_01"] = [0.10, 0.30, 0.50, 0.70, 0.90]
+        out["threshold_tests"]["tests"] = THRESHOLD_CORE_TESTS
+
+    elif preset == "standard":
+        out["general"]["runs_per_case"] = 5
+        out.setdefault("ofat", {})["enabled"] = True
+        out["ofat"]["runs_per_case"] = 3
+        out["ofat"]["relative_levels"] = [-0.30, -0.15, 0.0, 0.15, 0.30]
+        out["ofat"]["parameters"] = KEY_SCREENING_PARAMETERS
+        out.setdefault("threshold_tests", {})["enabled"] = True
+        out["threshold_tests"]["runs_per_case"] = 3
+        out["threshold_tests"]["grid_values_01"] = [0.10, 0.30, 0.50, 0.70, 0.90]
+        out["threshold_tests"]["tests"] = THRESHOLD_CORE_TESTS
+        out.setdefault("screening", {})["enabled"] = True
+        out["screening"]["n_samples"] = 80
+        out["screening"]["runs_per_sample"] = 2
+        out["screening"]["parameters"] = KEY_SCREENING_PARAMETERS
+
+    elif preset == "full":
+        out["general"]["runs_per_case"] = 10
+        out.setdefault("ofat", {})["enabled"] = True
+        out["ofat"]["runs_per_case"] = 10
+        out["ofat"]["relative_levels"] = [-0.30, -0.15, 0.0, 0.15, 0.30]
+        out["ofat"]["parameters"] = list(out.get("parameter_ranges", {}).keys())
+        out.setdefault("threshold_tests", {})["enabled"] = True
+        out["threshold_tests"]["runs_per_case"] = 5
+        out["threshold_tests"]["grid_values_01"] = [0.10, 0.30, 0.50, 0.70, 0.90]
+        out["threshold_tests"]["tests"] = [
+            {"name": "crew_access_x_management_access", "x": "crew_access", "y": "management_access"},
+            {"name": "reporting_burden_x_autonomy", "x": "reporting_burden", "y": "autonomy_level"},
+            {"name": "task_relevance_x_data_accuracy", "x": "task_relevance", "y": "data_accuracy"},
+            {"name": "surveillance_x_trust", "x": "perceived_surveillance", "y": "initial_trust_in_management"},
+            {"name": "constraint_screening_x_making_do", "x": "constraint_screening_strength", "y": "making_do_tendency"},
+        ]
+        out.setdefault("screening", {})["enabled"] = True
+        out["screening"]["n_samples"] = 150
+        out["screening"]["runs_per_sample"] = 3
+        out["screening"]["parameters"] = KEY_SCREENING_PARAMETERS
+
+    else:
+        raise SystemExit(f"Unknown preset: {preset}. Use config, smoke, light, screening, threshold, standard, or full.")
+    return out
+
+
+def estimate_run_count(cfg: Dict[str, Any], scenarios: Sequence[Any], modes: Sequence[str]) -> Dict[str, int]:
+    """Estimate number of individual model runs before execution."""
+    n_scenarios = len(scenarios)
+    general = cfg.get("general", {})
+    estimates: Dict[str, int] = {}
+
+    if "sanity" in modes:
+        estimates["sanity"] = len(cfg.get("sanity_cases", [])) * int(general.get("runs_per_case", 1)) * n_scenarios
+
+    if "ofat" in modes and cfg.get("ofat", {}).get("enabled", True):
+        ofat = cfg.get("ofat", {})
+        levels = ofat.get("relative_levels", [-0.3, -0.15, 0, 0.15, 0.3])
+        runs = int(ofat.get("runs_per_case", general.get("runs_per_case", 1)))
+        count = 0
+        for sc in scenarios:
+            for p in ofat.get("parameters", []):
+                if hasattr(sc, p):
+                    base_value = getattr(sc, p)
+                    if isinstance(base_value, (int, float)) and not isinstance(base_value, bool):
+                        count += len(levels) * runs
+        estimates["ofat"] = count
+
+    if "threshold" in modes and cfg.get("threshold_tests", {}).get("enabled", True):
+        threshold = cfg.get("threshold_tests", {})
+        grid = threshold.get("grid_values_01", [0.1, 0.3, 0.5, 0.7, 0.9])
+        runs = int(threshold.get("runs_per_case", general.get("runs_per_case", 1)))
+        estimates["threshold"] = len(threshold.get("tests", [])) * (len(grid) ** 2) * runs * n_scenarios
+
+    if "screening" in modes and cfg.get("screening", {}).get("enabled", True):
+        screening = cfg.get("screening", {})
+        estimates["screening"] = int(screening.get("n_samples", 0)) * int(screening.get("runs_per_sample", 1)) * n_scenarios
+
+    estimates["total"] = sum(estimates.values())
+    return estimates
+
+
+def print_run_estimate(estimates: Dict[str, int]) -> None:
+    total = estimates.get("total", 0)
+    print("\nEstimated individual model runs:")
+    for k, v in estimates.items():
+        if k != "total":
+            print(f"  {k:10s}: {v:,}")
+    print(f"  {'total':10s}: {total:,}")
+    if total:
+        print("\nRough runtime if one model run takes:")
+        for sec in [0.2, 1.0, 3.0, 5.0]:
+            minutes = total * sec / 60.0
+            if minutes < 60:
+                txt = f"{minutes:.1f} min"
+            else:
+                txt = f"{minutes/60.0:.1f} h"
+            print(f"  {sec:>3.1f} s/run -> {txt}")
+
+
+def confirm_before_run(total_runs: int, yes: bool) -> None:
+    if yes:
+        return
+    print("\nThe estimate above is approximate but useful for avoiding accidental long runs.")
+    answer = input("Continue? [y/N]: ").strip().lower()
+    if answer not in {"y", "yes", "k", "kylla", "kyllä"}:
+        raise SystemExit("Run cancelled by user.")
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -895,6 +1148,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-dir", type=str, default=None, help="Folder containing app.py, dvm_abm/ and config/.")
     parser.add_argument("--config", type=str, default="sensitivity_config.yaml", help="Sensitivity YAML config path.")
     parser.add_argument("--mode", type=str, default="all", choices=["all", "sanity", "ofat", "threshold", "screening"], help="Which test mode to run.")
+    parser.add_argument("--preset", type=str, default="smoke", choices=["config", "smoke", "light", "screening", "threshold", "standard", "full"], help="Run-size preset. Default smoke is intentionally small. Use --preset config to use YAML unchanged.")
+    parser.add_argument("--yes", action="store_true", help="Skip the run-count confirmation prompt.")
+    parser.add_argument("--estimate-only", action="store_true", help="Print estimated run count and exit without running simulations.")
     parser.add_argument("--out-dir", type=str, default=None, help="Output folder. Default: <model-dir>/sensitivity_results/<timestamp>.")
     parser.add_argument("--init-config", action="store_true", help="Write default config and exit.")
     return parser.parse_args()
@@ -911,6 +1167,7 @@ def main():
         return
 
     cfg = load_config(config_path)
+    cfg = apply_preset(cfg, args.preset)
 
     model_dir = Path(args.model_dir).expanduser().resolve() if args.model_dir else prompt_for_model_dir(Path.cwd())
     scenarios, analysis_mod = load_model_api(model_dir)
@@ -929,8 +1186,19 @@ def main():
     modes = ["sanity", "ofat", "threshold", "screening"] if args.mode == "all" else [args.mode]
     print(f"\nModel folder: {model_dir}")
     print(f"Output folder: {out_dir}")
+    print(f"Preset: {args.preset}")
     print(f"Scenarios: {[get_scenario_name(s) for s in selected_scenarios]}")
     print(f"Modes: {modes}")
+
+    estimates = estimate_run_count(cfg, selected_scenarios, modes)
+    print_run_estimate(estimates)
+    if args.estimate_only:
+        print("\nEstimate only: no simulations executed.")
+        return
+    confirm_before_run(estimates.get("total", 0), args.yes)
+
+    batch_started_at = datetime.now()
+    batch_perf_start = time.perf_counter()
 
     for mode in modes:
         if mode == "sanity":
@@ -967,8 +1235,11 @@ def main():
     screening_df = screening_correlations(final_df, cfg, key_metrics)
     flags_df = add_sanity_flags(summary_df)
 
+    batch_duration_sec = time.perf_counter() - batch_perf_start
+    batch_finished_at = datetime.now()
+
     excel_path = out_dir / f"dvm_abm_sensitivity_results_{timestamp}.xlsx"
-    export_excel(excel_path, cfg, final_df, summary_df, ofat_df, screening_df, flags_df, timeseries_df)
+    export_excel(excel_path, cfg, final_df, summary_df, ofat_df, screening_df, flags_df, timeseries_df, batch_started_at, batch_finished_at, batch_duration_sec)
 
     if cfg.get("outputs", {}).get("export_raw_csv", True):
         write_csv_outputs(out_dir, final_df, summary_df, ofat_df, screening_df, timeseries_df)

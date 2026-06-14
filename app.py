@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v25_9_role_calibrated_field_capacity"
+APP_DATA_VERSION = "v25_9_1_streamlit_frozen_scenario_fix"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -368,9 +368,23 @@ def cached_run_single(
         max_active_crews=max_active_crews,
         peak_underresource_factor=peak_underresource_factor,
     )
-    # v25.9 virtual scenario parameter. It is intentionally not required in
-    # scenarios.py; model.py reads it with getattr(..., default=1.0).
-    setattr(scenario, "field_interaction_capacity_multiplier", field_interaction_capacity_multiplier)
+    # v25.9.1 virtual scenario parameter. Scenario is a frozen dataclass in
+    # scenarios.py, so normal setattr() raises FrozenInstanceError in Streamlit.
+    # The value is intentionally attached as a virtual field; model.py reads it
+    # with getattr(..., default=1.0). This keeps scenarios.py/YAML unchanged.
+    try:
+        object.__setattr__(
+            scenario,
+            "field_interaction_capacity_multiplier",
+            field_interaction_capacity_multiplier,
+        )
+    except Exception:
+        # Fallback for future Scenario implementations where a normal replace
+        # field exists and direct virtual attachment is not allowed.
+        scenario = replace(
+            scenario,
+            field_interaction_capacity_multiplier=field_interaction_capacity_multiplier,
+        )
 
     frames = []
     for run_id in range(runs):

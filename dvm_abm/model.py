@@ -190,15 +190,32 @@ class DVMConstructionModel(Model):
 
     def _create_project(self,n):
         r=self.py_random
+        # v25.6: planned task completions are stretched to the full planned
+        # project duration. This keeps the model consistent with the planning
+        # interpretation: if the planned project duration is 100 days, the
+        # baseline contains work up to approximately day 100, and early/late
+        # completion is evaluated against that planned finish rather than an
+        # accidentally compressed random sample.
+        raw_ratios = sorted(self._sample_workload_ratio() for _ in range(max(1, n)))
+        if n <= 1:
+            planned_ratios = [1.0]
+        else:
+            lo, hi = min(raw_ratios), max(raw_ratios)
+            if hi > lo:
+                planned_ratios = [(x - lo) / (hi - lo) for x in raw_ratios]
+            else:
+                planned_ratios = [i / max(1, n - 1) for i in range(n)]
+            # Anchor the first and last tasks exactly to the modelled planning
+            # horizon. The internal distribution still follows the sampled
+            # workload curve, but the baseline no longer ends too early.
+            planned_ratios[0] = 0.0
+            planned_ratios[-1] = 1.0
+
         for i in range(n):
             pred=[r.randrange(max(1,i-10),i)] if i>6 and r.random()<.6 else []
-            # v25.2: distribute planned task finishes over the full planned
-            # project duration. Earlier versions compressed task finishes into
-            # about 82% of the project duration, which made near-on-time projects
-            # look late at task/PPC level.
-            start_ratio=self._sample_workload_ratio()
             planned_duration=r.randint(1,5)
-            planned_finish=int(clamp_range(round(start_ratio*self.planned_project_duration), planned_duration, self.planned_project_duration))
+            ratio = planned_ratios[i] if i < len(planned_ratios) else i / max(1, n - 1)
+            planned_finish=int(clamp_range(round(ratio*self.planned_project_duration), planned_duration, self.planned_project_duration))
             planned_start=max(0, planned_finish-planned_duration)
             t=TaskAgent(self,i,r.choice(self.trades),r.randrange(12),planned_start,planned_duration,r.uniform(.2,1),r.uniform(.35,1),pred); self.tasks.append(t)
         # Create the maximum potential crew pool. Daily resource curve decides how many are active.
@@ -290,6 +307,7 @@ class DVMConstructionModel(Model):
             "cumulative_rework_due_to_making_do": lambda m: sum(t.rework_due_to_making_do for t in m.tasks),
             "weekly_ppc": lambda m: m.weekly_ppc,
             "avg_weekly_ppc": lambda m: m.avg_weekly_ppc,
+            "aggregate_ppc": lambda m: m.aggregate_ppc,
             "last_completed_weekly_ppc": lambda m: m.last_completed_weekly_ppc,
             "weekly_carryover": lambda m: m.weekly_carryover,
             "open_schedule_backlog": lambda m: m.open_schedule_backlog,
@@ -423,13 +441,17 @@ class DVMConstructionModel(Model):
         ]
 
     def _committed_in_week(self, week):
-        # v25.1: weekly commitment means promised completion.
-        # Combine explicit LPS commitments, baseline completion promises and
-        # tasks actually completed during the week. The latter prevents finished
-        # work from disappearing from PPC simply because it was already in progress
-        # when commitments were generated.
+        # v25.6: PPC is based on weekly completion promises that have actually
+        # occurred during the observed project period. Do not add future baseline
+        # planned tasks directly here: planned-this-week tasks are converted into
+        # explicit commitments by _make_weekly_commitments when that week is
+        # reached. This avoids penalising early completion by extending PPC to
+        # future planned weeks after all tasks are already complete.
         ids = set(self.weekly_commitments.get(int(week), set()))
-        ids.update(t.id for t in self._planned_in_week(week))
+        # If a task is completed in this week but was not captured in the explicit
+        # commitment set, include it as a weekly completion promise for the actual
+        # completion week. This keeps completed work in the PPC denominator while
+        # still stopping PPC at actual project completion.
         ids.update(t.id for t in self._actual_completion_promises_in_week(week))
         return [t for t in self.tasks if t.id in ids]
 
@@ -449,17 +471,29 @@ class DVMConstructionModel(Model):
             return None
         return len(self._completed_committed_in_week(week)) / len(committed)
 
+    def _ppc_observed_weeks(self):
+        # PPC is observed only for weeks in which the project is active.
+        # If all tasks finish before the planned finish, PPC stops at the actual
+        # completion week. If the project is late, PPC continues until all tasks
+        # are completed. During a running simulation, use the current week.
+        if self.tasks and all(t.is_done for t in self.tasks):
+            finish_day = max((t.actual_finish or 0.0) for t in self.tasks)
+            last_week = self._week_for_day(finish_day)
+        else:
+            last_week = self.current_week
+        return range(1, max(1, int(last_week)) + 1)
+
     @property
     def total_ppc_promises(self):
         # Aggregate promised completions across the whole observed project.
         # This is more stable than averaging small weekly percentages.
-        weeks = range(1, max(self.current_week, self._week_for_day(self.planned_project_duration)) + 1)
+        weeks = self._ppc_observed_weeks()
         ids_by_week = {w: {t.id for t in self._committed_in_week(w)} for w in weeks}
         return sum(len(ids) for ids in ids_by_week.values())
 
     @property
     def total_ppc_successes(self):
-        weeks = range(1, max(self.current_week, self._week_for_day(self.planned_project_duration)) + 1)
+        weeks = self._ppc_observed_weeks()
         successes = 0
         for w in weeks:
             successes += len(self._completed_committed_in_week(w))
@@ -527,14 +561,25 @@ class DVMConstructionModel(Model):
         return values[-1][1]
 
     @property
-    def avg_weekly_ppc(self):
-        # v25.1: use aggregate PPC over all observed weekly promises:
-        # total successful promises / total promises. This avoids small empty or
-        # partial weeks distorting PPC and keeps it consistent with project completion.
+    def aggregate_ppc(self):
+        # Aggregate ratio retained as a diagnostic: all successful weekly promises
+        # divided by all promises over the observed project period.
         promises = self.total_ppc_promises
         if promises <= 0:
             return self.weekly_ppc or 0.0
         return self.total_ppc_successes / promises
+
+    @property
+    def avg_weekly_ppc(self):
+        # v25.6: PPC is reported as the average of weekly PPC values over the
+        # observed active project weeks. It stops at actual completion if the
+        # project finishes early, and continues until all tasks are completed if
+        # the project is late. Empty weeks without promises are ignored.
+        values = [self._weekly_ppc_value(w) for w in self._ppc_observed_weeks()]
+        values = [v for v in values if v is not None]
+        if not values:
+            return self.weekly_ppc or 0.0
+        return safe_mean(values)
 
     @property
     def sound_commitment_share(self):

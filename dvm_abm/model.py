@@ -269,6 +269,7 @@ class DVMConstructionModel(Model):
             "field_interaction_capacity_hours_per_day": lambda m: m.field_interaction_capacity_hours_today,
             "field_interaction_demand_hours_per_day": lambda m: m.field_interaction_demand_hours_today,
             "baseline_field_interaction_demand_hours_per_day": lambda m: m.baseline_field_interaction_demand_hours_today,
+            "field_interaction_demand_multiplier": lambda m: float(getattr(m.dvm_scenario,"field_interaction_demand_multiplier",1.0)),
             "field_interaction_used_hours_per_day": lambda m: m.supervisor.last_field_interaction_used,
             "field_interaction_hours_per_supervisor_day": lambda m: m.supervisor.last_field_interaction_hours_per_supervisor_day,
             "field_interaction_hours_per_active_crew_day": lambda m: m.supervisor.last_field_interaction_used/max(1.0,len(getattr(m,"active_crews",[]))),
@@ -819,6 +820,15 @@ class DVMConstructionModel(Model):
         # too large. Field interaction is now calibrated as hours per active crew
         # per day. DVM self-service reduces routine questions and local support need.
         demand_per_active_crew=clamp_range(0.65 + 0.75*uncertainty - .35*dvm_self_service, .25, 1.60)
+        # v25.7: sensitivity-only multiplier for threshold testing.
+        # Default 1.0 preserves v25.6 behaviour. The v8 sensitivity harness can
+        # attach this as a virtual Scenario attribute without editing scenarios.py.
+        field_demand_multiplier=clamp_range(
+            float(getattr(self.dvm_scenario,"field_interaction_demand_multiplier",1.0)),
+            0.10,
+            5.00,
+        )
+        demand_per_active_crew=clamp_range(demand_per_active_crew*field_demand_multiplier, .05, 5.00)
         self.baseline_field_interaction_demand_hours_today=len(getattr(self,"active_crews",[]))*demand_per_active_crew
         self.field_interaction_demand_hours_today=self.baseline_field_interaction_demand_hours_today
         self.unresolved_field_support_hours_today=0.0

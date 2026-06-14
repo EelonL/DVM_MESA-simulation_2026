@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v25_8_supervisor_visualization_update"
+APP_DATA_VERSION = "v25_9_role_calibrated_field_capacity"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -341,6 +341,7 @@ def cached_run_single(
     perceived_surveillance: float,
     reporting_burden: float,
     supervisor_capacity: float,
+    field_interaction_capacity_multiplier: float,
     initial_planning_quality: float,
     supervisor_base_workload: float,
     max_active_crews: int,
@@ -367,6 +368,9 @@ def cached_run_single(
         max_active_crews=max_active_crews,
         peak_underresource_factor=peak_underresource_factor,
     )
+    # v25.9 virtual scenario parameter. It is intentionally not required in
+    # scenarios.py; model.py reads it with getattr(..., default=1.0).
+    setattr(scenario, "field_interaction_capacity_multiplier", field_interaction_capacity_multiplier)
 
     frames = []
     for run_id in range(runs):
@@ -431,6 +435,8 @@ FRIENDLY_METRIC_NAMES = {
     "supervisor_utilization": "Supervisor utilization",
     "field_interaction_capacity_hours_per_day": "Field interaction capacity, h/day",
     "field_interaction_demand_hours_per_day": "Field interaction demand, h/day",
+    "field_interaction_capacity_multiplier": "Field-support capacity multiplier",
+    "site_manager_supervisor_coordination_hours_per_day": "Site-manager supervisor coordination, h/day",
     "field_interaction_used_hours_per_day": "Field interaction used, h/day",
     "field_interaction_hours_per_supervisor_day": "Field interaction, h/supervisor day",
     "field_interaction_hours_per_active_crew_day": "Field interaction, h/active crew day",
@@ -617,6 +623,8 @@ def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
         "supervisor_available_planning_capacity",
         "field_interaction_capacity_hours_per_day",
         "field_interaction_demand_hours_per_day",
+        "field_interaction_capacity_multiplier",
+        "site_manager_supervisor_coordination_hours_per_day",
         "baseline_field_interaction_demand_hours_per_day",
         "field_interaction_used_hours_per_day",
         "field_interaction_hours_per_supervisor_day",
@@ -753,6 +761,18 @@ with st.sidebar:
 
     st.markdown("**Supervisor and planning**")
     supervisor_capacity = st.slider("Supervisor capacity (h/day)", 2.0, 16.0, float(active_scenario.supervisor_capacity), step=0.5)
+    field_interaction_capacity_multiplier = st.slider(
+        "Field-support capacity multiplier",
+        0.50,
+        2.00,
+        float(getattr(active_scenario, "field_interaction_capacity_multiplier", 1.0)),
+        step=0.05,
+        help=(
+            "Sensitivity control for crew-facing supervisor field-support capacity. "
+            "1.0 uses the role-calibrated empirical baseline: trade supervisors 40% direct field support, "
+            "site manager 15% direct crew support and 10% supervisor coordination."
+        ),
+    )
     initial_planning_quality = st.slider(
         "Initial planning quality",
         0.0,
@@ -808,6 +828,7 @@ cache_key = (
     round(perceived_surveillance, 4),
     round(reporting_burden, 4),
     round(supervisor_capacity, 4),
+    round(field_interaction_capacity_multiplier, 4),
     round(initial_planning_quality, 4),
     round(supervisor_base_workload, 4),
     int(max_active_crews),
@@ -859,6 +880,7 @@ single_metadata = {
     "perceived_surveillance": perceived_surveillance,
     "reporting_burden": reporting_burden,
     "supervisor_capacity": supervisor_capacity,
+    "field_interaction_capacity_multiplier": field_interaction_capacity_multiplier,
     "initial_planning_quality": initial_planning_quality,
     "supervisor_base_workload": supervisor_base_workload,
     "max_active_crews": max_active_crews,

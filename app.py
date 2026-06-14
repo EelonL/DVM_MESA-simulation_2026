@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v25_4_field_interaction_supervisor_time"
+APP_DATA_VERSION = "v25_5_supervisor_time_calibration"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────

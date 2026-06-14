@@ -76,16 +76,24 @@ class DVMConstructionModel(Model):
         self.supervisor_count_today=1
         self.supervisor_capacity_per_person=float(getattr(self.dvm_scenario,"supervisor_capacity",8.0))
         self.effective_supervisor_capacity_today=self.supervisor_capacity_per_person
-        # v25.4: role-based foreman/site-manager time allocation.
-        # These shares are interpreted as field worker-interaction time and proactive
-        # planning time, not as passive observation. They provide empirical anchors
-        # for the supervisor resource using foreman time-allocation literature.
+        # v25.9: role-calibrated foreman/site-manager time allocation.
+        # Trade supervisors' 40% supervision share is interpreted as direct crew
+        # field interaction. For the site manager, the observed 25% supervision
+        # share is split into (a) direct crew field support and (b) coordination
+        # with trade supervisors / site management. This avoids treating the site
+        # manager as an additional full crew-facing foreman.
         self.trade_supervisor_day_hours=8.0
         self.site_manager_day_hours=8.2
         self.trade_supervisor_field_share=0.40
         self.trade_supervisor_planning_share=0.14
-        self.site_manager_field_share=0.25
+        self.site_manager_direct_field_share=0.15
+        self.site_manager_supervisor_coordination_share=0.10
+        # Compatibility alias for older visualisations/debugging; direct crew-facing
+        # field support only, not the full site-manager supervision share.
+        self.site_manager_field_share=self.site_manager_direct_field_share
         self.site_manager_planning_share=0.16
+        self.field_interaction_capacity_multiplier_today=float(getattr(self.dvm_scenario,"field_interaction_capacity_multiplier",1.0))
+        self.site_manager_supervisor_coordination_hours_today=0.0
         self.field_interaction_capacity_hours_today=0.0
         self.field_interaction_demand_hours_today=0.0
         self.baseline_field_interaction_demand_hours_today=0.0
@@ -270,6 +278,9 @@ class DVMConstructionModel(Model):
             "field_interaction_demand_hours_per_day": lambda m: m.field_interaction_demand_hours_today,
             "baseline_field_interaction_demand_hours_per_day": lambda m: m.baseline_field_interaction_demand_hours_today,
             "field_interaction_demand_multiplier": lambda m: float(getattr(m.dvm_scenario,"field_interaction_demand_multiplier",1.0)),
+            "field_interaction_capacity_multiplier": lambda m: float(getattr(m,"field_interaction_capacity_multiplier_today",float(getattr(m.dvm_scenario,"field_interaction_capacity_multiplier",1.0)))),
+            "site_manager_direct_field_share": lambda m: float(getattr(m,"site_manager_direct_field_share",0.15)),
+            "site_manager_supervisor_coordination_hours_per_day": lambda m: float(getattr(m,"site_manager_supervisor_coordination_hours_today",0.0)),
             "field_interaction_used_hours_per_day": lambda m: m.supervisor.last_field_interaction_used,
             "field_interaction_hours_per_supervisor_day": lambda m: m.supervisor.last_field_interaction_hours_per_supervisor_day,
             "field_interaction_hours_per_active_crew_day": lambda m: m.supervisor.last_field_interaction_used/max(1.0,len(getattr(m,"active_crews",[]))),
@@ -769,8 +780,11 @@ class DVMConstructionModel(Model):
         - each active discipline/trade has one trade supervisor;
         - one site manager is available above trade supervisors;
         - trade supervisors and site manager have different time-allocation profiles;
-        - field interaction means time spent with crews on site: instructions,
-          workface checks, small problem solving, coordination and supervision.
+        - trade-supervisor field interaction means time spent with crews on site:
+          instructions, workface checks, small problem solving and local coordination;
+        - site-manager supervision time is split into direct crew support and
+          coordination with trade supervisors / site management. Only the direct
+          crew-support share is counted as worker-facing field-support capacity.
 
         The model still uses one aggregate SupervisorAgent, but its daily capacity
         and time budgets are built from these role counts.
@@ -785,10 +799,20 @@ class DVMConstructionModel(Model):
         self.effective_supervisor_capacity_today=trade_hours+site_hours
         self.supervisor_capacity_per_person=(self.effective_supervisor_capacity_today/max(1,self.supervisor_count_today)) if self.supervisor_count_today else 0.0
 
-        self.field_interaction_capacity_hours_today=(
+        base_field_interaction_capacity=(
             trade_hours*self.trade_supervisor_field_share
-            + site_hours*self.site_manager_field_share
+            + site_hours*self.site_manager_direct_field_share
         )
+        self.site_manager_supervisor_coordination_hours_today=site_hours*self.site_manager_supervisor_coordination_share
+        # v25.9: sensitivity-only capacity multiplier. Default 1.0 preserves the
+        # empirically anchored role shares; threshold tests can vary this to ask
+        # when crew-facing field support becomes a bottleneck.
+        self.field_interaction_capacity_multiplier_today=clamp_range(
+            float(getattr(self.dvm_scenario,"field_interaction_capacity_multiplier",1.0)),
+            0.10,
+            3.00,
+        )
+        self.field_interaction_capacity_hours_today=base_field_interaction_capacity*self.field_interaction_capacity_multiplier_today
         self.planning_target_hours_today=max(
             float(getattr(self.dvm_scenario,"planning_need_per_day",2.0)),
             trade_hours*self.trade_supervisor_planning_share
@@ -801,7 +825,13 @@ class DVMConstructionModel(Model):
         trade_admin_hours=trade_hours*0.17
         site_admin_hours=site_hours*0.28
         site_meeting_hours=site_hours*0.10
-        self.admin_reporting_nominal_hours_today=max(0.0, trade_admin_hours + site_admin_hours + site_meeting_hours)
+        self.admin_reporting_nominal_hours_today=max(
+            0.0,
+            trade_admin_hours
+            + site_admin_hours
+            + site_meeting_hours
+            + self.site_manager_supervisor_coordination_hours_today,
+        )
         # Routine field interaction demand: the more active crews and the more
         # uncertain the workface, the more same-day crew interaction is needed.
         uncertainty=(

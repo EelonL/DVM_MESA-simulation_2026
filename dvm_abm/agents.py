@@ -224,6 +224,7 @@ class SupervisorAgent(MesaCompatAgent):
         self.cumulative_field_interaction_used = 0.0
         self.cumulative_unresolved_field_support = 0.0
         self.cumulative_admin_reporting_time = 0.0
+        self.cumulative_supervisor_coordination_time = 0.0
 
         # Last-day metrics used by DataCollector.
         # These must exist before the first DataCollector.collect().
@@ -250,6 +251,8 @@ class SupervisorAgent(MesaCompatAgent):
         self.last_planning_hours_per_supervisor_day = 0.0
         self.last_field_interaction_hours_per_supervisor_day = 0.0
         self.last_admin_reporting_hours_per_supervisor_day = 0.0
+        self.last_supervisor_coordination_time = 0.0
+        self.last_supervisor_coordination_hours_per_supervisor_day = 0.0
         self.last_reactive_hours_per_supervisor_day = 0.0
 
     def process_day(
@@ -277,6 +280,7 @@ class SupervisorAgent(MesaCompatAgent):
         field_capacity = float(getattr(m, "field_interaction_capacity_hours_today", capacity_total * 0.35))
         planning_need = float(getattr(m, "planning_target_hours_today", self.planning_need_per_day))
         nominal_admin = float(getattr(m, "admin_reporting_nominal_hours_today", 0.0))
+        supervisor_coordination_time = float(getattr(m, "site_manager_supervisor_coordination_hours_today", 0.0))
 
         variability = 0.0
         if r is not None and self.admin_variability > 0:
@@ -377,6 +381,8 @@ class SupervisorAgent(MesaCompatAgent):
         self.last_planning_hours_per_supervisor_day = planning / supervisor_count
         self.last_field_interaction_hours_per_supervisor_day = field_used / supervisor_count
         self.last_admin_reporting_hours_per_supervisor_day = base_workload / supervisor_count
+        self.last_supervisor_coordination_time = supervisor_coordination_time
+        self.last_supervisor_coordination_hours_per_supervisor_day = supervisor_coordination_time / supervisor_count
         self.last_reactive_hours_per_supervisor_day = field_used / supervisor_count
 
         self.cumulative_reactive_time += field_used
@@ -392,6 +398,7 @@ class SupervisorAgent(MesaCompatAgent):
         self.cumulative_field_interaction_used += field_used
         self.cumulative_unresolved_field_support += unresolved_field_support
         self.cumulative_admin_reporting_time += base_workload
+        self.cumulative_supervisor_coordination_time += supervisor_coordination_time
 
         planning_gain = s.proactive_planning_effect * planning * (1 - m.planning_quality)
         planning_loss = (

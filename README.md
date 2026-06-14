@@ -1,48 +1,77 @@
 # DVM-ABM simulator
 
-Mesa- and Streamlit-based agent-based simulation model for exploring how different forms of Digital Visual Management (DVM) may influence production reliability, situational awareness, supervisor workload, making-do, recovery from disruptions and project completion in a construction setting.
+Agent-based simulation model for exploring how different forms of Digital Visual Management (DVM) may influence production reliability, weekly planning reliability, supervisor workload, making-do, disruption recovery and project completion in construction workface production.
 
-The model is intended as a research and learning tool. It does not predict a real project directly. Instead, it helps compare alternative management and information-system scenarios under the same simulated workload and disruption environment.
+The model is implemented in Python with Mesa-style agent-based modelling logic and a Streamlit user interface. It is intended for research, teaching and exploratory model-based reasoning. It is not a validated production-planning engine and should not be used to forecast a real project without calibration and validation.
 
-## Purpose
+## Current version
 
-The simulator asks a practical question:
+Current integrated model state:
 
-> How do different visual management and digital visual management configurations affect the reliability of weekly planning, the accumulation of unfinished work, the workload of the supervisor, and the final completion time of a construction project?
+```text
+v25.8 — Supervisor visualization update
+```
 
-The model combines ideas from:
+The latest state combines these major development steps:
 
-- Last Planner System (LPS)
-- Percent Plan Complete (PPC)
-- make-ready planning
-- making-do and rework
-- situational awareness
-- digital visual management
-- supervisor firefighting and planning time
-- external disruptions and recovery
-- project workload and resource fit
+| Version | Main change |
+|---|---|
+| v25.3 | Project-time aggregate metrics, improved idle-time units, dynamic supervisor capacity and sensitivity-harness timing. |
+| v25.4 | Supervisor field-interaction logic added: supervision interpreted as site-based worker interaction and support time. |
+| v25.5 | Supervisor time-allocation calibration corrected to avoid double-counting administrative/reporting load. |
+| v25.6 | PPC and planned/actual duration alignment corrected. PPC is calculated over the observed project period during which tasks remain. |
+| v25.7 | `field_interaction_demand_multiplier` added for targeted threshold tests of supervisor field-support bottlenecks. |
+| v25.8 | Supervisor tab visualisation updated to show current time-allocation and field-support metrics instead of obsolete legacy workload charts. |
 
-The current model version is developed as an exploratory research prototype, not as a validated production-planning engine.
+The Streamlit cache key in the current `app.py` is:
+
+```python
+APP_DATA_VERSION = "v25_8_supervisor_visualization_update"
+```
+
+After uploading changes to Streamlit Community Cloud, use:
+
+```text
+Manage app → Clear cache → Reboot
+```
+
+## Purpose of the model
+
+The simulator compares alternative DVM and visual management configurations under the same simulated project workload, resource constraints and disruption environment.
+
+The guiding research question is:
+
+> Under what conditions does Digital Visual Management support or harm production reliability at the construction workface?
+
+The model is especially suited for examining mechanisms such as:
+
+- whether DVM improves workface situational awareness;
+- whether crews can use information directly, or whether information is mainly visible to management;
+- whether DVM reduces uncertainty and waiting, or becomes reporting and surveillance burden;
+- how make-ready quality affects weekly commitments and PPC;
+- how supervisor field-interaction capacity affects crew progress;
+- how making-do and constraint debt may influence later disruption and rework;
+- how alternative ready-work switching helps recovery from disruptions.
 
 ## Main scenarios
 
-The default scenario set compares five forms of visual management or DVM use.
+The default model compares five DVM / visual management configurations.
 
 | Scenario key | Display name | Interpretation |
 |---|---|---|
-| `analog_vm` | Analog visual management | Traditional visual planning and coordination, limited digital support. |
-| `management_dashboard` | Management dashboard | Information mainly supports managers; weaker direct support for crews. |
-| `forced_reporting_dvm` | DVM as forced reporting | Digital system is used mainly for control, reporting and compliance. |
-| `workface_dvm` | Ready work area DVM | Digital support is focused on ready work areas, constraints and crew usability. |
-| `dvm_lean_autonomous` | Lean-autonomous DVM | DVM supports autonomous decision-making, make-ready quality and team learning. |
+| `analog_vm` | Analog visual management | Traditional visual planning and coordination with limited digital support. |
+| `management_dashboard` | Management dashboard | Information mainly supports management visibility; weaker direct support for crews. |
+| `forced_reporting_dvm` | DVM as forced reporting | Digital system is used primarily for reporting, compliance and control. |
+| `workface_dvm` | Ready work area DVM | DVM focuses on ready work areas, constraints, task status and crew usability. |
+| `dvm_lean_autonomous` | Lean-autonomous DVM | DVM supports autonomous crew decisions, make-ready quality, learning and production flow. |
 
-The scenario parameters are defined in:
+Scenario parameters are configured in:
 
 ```text
 config/scenarios.yaml
 ```
 
-The Python dataclass structure is defined in:
+The Python scenario structure is defined in:
 
 ```text
 dvm_abm/scenarios.py
@@ -53,50 +82,55 @@ dvm_abm/scenarios.py
 Expected repository structure:
 
 ```text
-app.py
-requirements.txt
-dvm_abm/
-    __init__.py
-    model.py
-    agents.py
-    scenarios.py
-    shocks.py
-    analysis.py
-    export.py
-    visualization.py
-    utils.py
-config/
-    scenarios.yaml
+DVM_MESA-simulation_2026-main/
+    app.py
+    requirements.txt
+    config/
+        scenarios.yaml
+    dvm_abm/
+        __init__.py
+        model.py
+        agents.py
+        scenarios.py
+        shocks.py
+        analysis.py
+        export.py
+        visualization.py
+        utils.py
+    sensitivity_harness_v8/
+        sensitivity_harness/
+            run_sensitivity.py
+            sensitivity_config.yaml
+            requirements_sensitivity.txt
+            README_sensitivity.md
 ```
 
-The Streamlit application entry point is:
+The exact repository may contain additional notebooks, output files or older update packages. The core Streamlit application requires `app.py`, `requirements.txt`, `config/` and `dvm_abm/`.
 
-```bash
-streamlit run app.py
-```
-
-## Installation
+## Installation and local use
 
 Create and activate a virtual environment:
 
-```bash
+```powershell
 py -m venv .venv
 .venv\Scripts\activate
 ```
 
 Install dependencies:
 
-```bash
+```powershell
 py -m pip install -r requirements.txt
 ```
 
-Run locally:
+Run the Streamlit app locally:
 
-```bash
+```powershell
 streamlit run app.py
 ```
 
-If using Streamlit Community Cloud, the repository should include at least:
+## Streamlit Community Cloud deployment
+
+The repository should include at least:
 
 ```text
 app.py
@@ -105,67 +139,88 @@ dvm_abm/
 config/
 ```
 
-After larger model updates, clear the Streamlit cache and reboot the app:
+After pushing changes to GitHub, reboot the deployed app:
 
 ```text
 Manage app → Clear cache → Reboot
 ```
 
-This is important because Streamlit may otherwise reuse old cached model objects or scenario objects.
+This is important because Streamlit can otherwise reuse old cached model objects, scenarios or result tables.
 
 ## User interface
 
-The Streamlit app contains six main tabs:
+The Streamlit app contains the following main tabs.
 
 | Tab | Purpose |
 |---|---|
-| Overview | Key scenario results, PPC, make-ready, backlog, delay and main charts. |
-| Time series | Time-dependent development of selected metrics. |
-| Disruptions | External disruption, recovery and alternative task switching metrics. |
-| Supervisor | Supervisor workload, planning time, reactive work and firefighting. |
-| Scenario comparison | Runs all scenarios under the same settings for comparison. |
-| Data | Shows and downloads the underlying result tables. |
+| Overview | Key result metrics, PPC, project completion, make-ready, backlog and main charts. |
+| Time series | Time-dependent development of selected production and DVM metrics. |
+| Disruptions | External disruptions, recovery time, alternative task switching and external idle time. |
+| Supervisor | Supervisor time allocation, field support utilisation, unresolved support and diagnostics. |
+| Scenario comparison | Runs all scenarios under the same input settings for comparison. |
+| Data | Shows and downloads result tables. |
 
 The app supports Excel export for both single-scenario runs and scenario comparison runs.
 
-## Main simulation settings
+## Main user inputs
 
-The most important user-controlled inputs are:
+The Streamlit sidebar controls the most important run settings.
 
 | Setting | Meaning |
 |---|---|
 | Runs | Number of stochastic replications. |
-| Planned project duration, days | Planned target duration of the project. The simulation may continue beyond this until all tasks are complete. |
+| Planned project duration, days | Planned target duration of the project. This is not a hard stop. |
 | Base seed | Random seed for reproducibility. |
-| Daily external shock probability | Probability of external disruptions. |
-| Capture rate | How well the DVM system captures relevant site information. |
-| Data accuracy | Accuracy of captured data. |
-| Data timeliness | How fresh the information is. |
-| Crew access | How well crews can access and use the information. |
-| Management access | How well management can access the information. |
-| Autonomy | Degree to which crews can act autonomously based on DVM. |
-| Perceived surveillance | Degree to which DVM feels like monitoring/control. |
-| Reporting burden | Extra administrative burden caused by the system. |
-| Supervisor capacity | Available supervisor working capacity per day. |
-| Initial planning quality | Initial level of planning reliability. |
-| Maximum active crews | Maximum resource level near the project peak. |
-| Peak resource fit | How well resources match peak workload. |
+| Daily external shock probability | Probability of external disruption on a given day. |
+| Capture rate | How much relevant site information the DVM system captures. |
+| Data accuracy | Accuracy of captured information. |
+| Data timeliness | Freshness of information. |
+| Data completeness | Coverage of relevant information. |
+| Integration level | Degree of integration across information sources. |
+| Crew access | How well crews can access and use DVM information. |
+| Management access | How well management can access DVM information. |
+| Visual clarity | How clearly information is represented. |
+| Task relevance | How relevant the information is for actual workface decisions. |
+| Autonomy | Degree to which crews can act independently based on DVM. |
+| Decision centralization | Degree to which decisions remain management-centred. |
+| Perceived surveillance | Degree to which DVM is experienced as monitoring/control. |
+| Reporting burden | Additional administrative work caused by DVM. |
+| Supervisor capacity | Supervisor working capacity parameter used in support and planning logic. |
+| Initial planning quality | Initial reliability of make-ready and production planning. |
+| Maximum active crews | Peak active crew capacity in the project. |
+| Peak resource fit | How well available resources match peak workload. |
 
 ## Core model logic
 
-### Project baseline
+### 1. Planned duration and actual duration
 
-The project consists of a fixed number of tasks. The planned completion of tasks is distributed over the user-defined planned project duration.
+The input `Planned project duration, days` is the planned target duration. It is not a simulation stop.
 
-This is important:
+The simulation continues until:
 
-> If the user sets the planned project duration to 100 days, the baseline task completions are distributed across that 100-day plan.
+```text
+all tasks are complete
+```
 
-The simulation then shows whether the project finishes early, on time or late.
+or until a technical safety limit is reached.
 
-### Task states
+Project delay is calculated as:
 
-Tasks may move through states such as:
+```text
+project_delay_days = max(0, actual_project_finish - planned_project_duration)
+```
+
+If the project finishes before the planned completion day, the project finishes early. The model does not force the simulation to continue just because the planned duration has not yet ended.
+
+### 2. Baseline task plan
+
+The model creates a baseline task plan over the planned project duration. If planned duration is 100 days, planned task completions are distributed over approximately those 100 days.
+
+This avoids the earlier artefact where the baseline plan ended before the planned project duration and made otherwise reasonable project completion appear late in PPC terms.
+
+### 3. Task states
+
+Tasks move through simplified production states, for example:
 
 ```text
 NOT_READY
@@ -175,11 +230,11 @@ INTERRUPTED
 COMPLETED
 ```
 
-The model tracks both planned and actual task timing.
+Each task has a planned finish and actual progress. The model tracks whether tasks are ready, started, interrupted, completed, late or carried over.
 
-### LPS constraints
+### 4. Make-ready and constraints
 
-Each task has make-ready prerequisites, such as:
+Each task has make-ready prerequisites such as:
 
 ```text
 design_ready
@@ -192,55 +247,141 @@ approval_ready
 safety_quality_ready
 ```
 
-These constraints form a make-ready score. A task is sound when enough prerequisites are satisfied and predecessor logic is valid.
+The share of satisfied prerequisites forms a make-ready score. A task is considered sound when its make-ready score meets the scenario threshold and its predecessor logic is valid.
 
-### Weekly commitments and PPC
+### 5. Weekly commitments and PPC
 
-The model uses a Last Planner style weekly planning logic.
+The model uses Last Planner style weekly commitments.
 
 A weekly commitment means:
 
-> A task is promised to be completed during the week.
-
-The model assumes that LPS tasks are already sized so that they can be completed within a week. Longer work packages should be split into smaller weekly tasks before PPC is calculated.
-
-PPC is calculated as:
-
 ```text
-PPC = successful weekly completion promises / all weekly completion promises
+A task is promised to be completed during the week.
 ```
 
-The model aligns PPC with actual weekly task completions so that completed work does not fall outside the PPC denominator.
+PPC is calculated as the average of weekly PPC values over the observed project period:
 
-Important PPC-related outputs include:
+```text
+weekly_ppc = completed promised weekly tasks / promised weekly tasks
+avg_weekly_ppc = average of weekly PPC values
+```
 
-| Metric | Meaning |
+The PPC horizon follows the actual project observation period:
+
+- if the project finishes early, PPC is calculated until the week when the last task is completed;
+- if the project finishes late, PPC continues until all tasks are completed;
+- future weeks after actual project completion are not added to the PPC denominator.
+
+The model also reports:
+
+```text
+aggregate_ppc = total successful weekly promises / total weekly promises
+```
+
+`avg_weekly_ppc` is the primary PPC metric. `aggregate_ppc` is a diagnostic comparator.
+
+### 6. Carryover and backlog
+
+If a promised task is not completed in its committed week, it can become carryover. Carryover tasks may be recommitted in later weeks, but the model limits repeated denominator inflation from the same delayed task.
+
+Key outputs include:
+
+```text
+open_schedule_backlog
+mean_open_schedule_backlog
+max_open_schedule_backlog
+cumulative_plan_failures
+late_completed_tasks
+avg_lateness_days
+```
+
+### 7. DVM information, situational awareness and trust
+
+DVM quality is represented through information capture, accuracy, timeliness, completeness, integration, visibility, access and user fit.
+
+Simplified causal chain:
+
+```text
+DVM scenario
+→ information quality and access
+→ crew and management picture quality
+→ situational awareness
+→ make-ready quality
+→ weekly commitments
+→ PPC and project completion
+```
+
+DVM can also have negative effects through:
+
+```text
+reporting burden
+perceived surveillance
+decision centralization
+low task relevance
+low visual clarity
+```
+
+### 8. Supervisor time allocation
+
+The current model treats supervision as limited site-based worker interaction and support time, not passive inspection.
+
+Supervisor time is divided into:
+
+```text
+field interaction / worker support
+planning
+admin and reporting
+reactive problem handling
+```
+
+The model uses two stylised supervisor roles:
+
+| Role | Interpretation |
 |---|---|
-| `weekly_ppc` | PPC for the current week. |
-| `avg_weekly_ppc` | Aggregate PPC over observed promises. |
-| `last_completed_weekly_ppc` | PPC of the latest completed week. |
-| `weekly_committed_tasks` | Number of tasks promised for the current week. |
-| `completed_committed_tasks` | Number of promised tasks completed by week end. |
-| `total_ppc_promises` | Total number of PPC promises counted. |
-| `total_ppc_successes` | Total number of successful PPC promises. |
-| `ppc_schedule_score` | Schedule-based diagnostic score. |
-| `ppc_schedule_consistency_gap` | Diagnostic gap between schedule performance and PPC. |
+| Trade supervisor | One supervisor per active trade / discipline. |
+| Site manager | One site manager coordinating the whole site. |
 
-### Carryover
+Empirical anchoring is based on construction site management time-allocation studies. In the model, field interaction limits how much worker support, coordination, problem solving and immediate guidance can be provided during a day.
 
-If a task is not completed during its planned week, it may become carryover. Carryover can be re-committed, but the model includes limits so that one repeatedly delayed task does not inflate the PPC denominator indefinitely.
+Important supervisor metrics:
 
-### Making-do
+```text
+supervisor_count_today
+trade_supervisor_count_today
+site_manager_count_today
+effective_supervisor_capacity_today
+field_interaction_capacity_hours_per_day
+field_interaction_demand_hours_per_day
+baseline_field_interaction_demand_hours_per_day
+field_interaction_used_hours_per_day
+field_interaction_hours_per_supervisor_day
+field_interaction_hours_per_active_crew_day
+field_support_utilization
+unresolved_field_support_hours_per_day
+planning_hours_per_day
+planning_hours_per_supervisor_day
+admin_reporting_hours_per_day
+admin_reporting_hours_per_supervisor_day
+supervisor_utilization
+```
 
-If a task is started without enough prerequisites, the model may treat this as making-do. Making-do can cause:
+If field-interaction demand exceeds capacity, unresolved field support may increase crew waiting, slow progress and increase the risk of making-do or carryover.
 
-- interruptions
-- rework
-- escalation
-- additional coordination demand
-- lost productivity
+### 9. Making-do and rework
 
-Relevant metrics include:
+A task may be started before all prerequisites are properly ready. This is treated as making-do.
+
+Making-do can cause:
+
+```text
+interruptions
+additional coordination demand
+rework
+lost productivity
+future instability
+```
+
+Relevant outputs:
 
 ```text
 making_do_starts
@@ -251,221 +392,321 @@ rework_due_to_making_do
 cumulative_rework_due_to_making_do
 ```
 
-### Active crew selection
+The current model activates making-do, but its long-term consequences are still exploratory and should be interpreted cautiously unless further calibrated.
 
-The model does not simply activate the first N crews in a fixed list. Active crews are selected based on current trade-specific demand.
+### 10. External disruptions and recovery
 
-The selection considers:
+The model includes external disruptions such as material shortages, logistics delays, lifting delays, missing design information, unavailable equipment and weather-related disruptions.
 
-- in-progress work
-- weekly commitments
-- ready tasks
-- overdue tasks
-- task priority
-- remaining trade-specific backlog
-
-This avoids a late-project artefact where the wrong trades remain active while the remaining tasks belong to other trades.
-
-### Project completion
-
-The input `Planned project duration, days` is the planned target duration, not a hard simulation stop.
-
-The model continues until:
+DVM may support recovery by improving:
 
 ```text
-all tasks are complete
+constraint visibility
+alternative ready-work visibility
+crew situational awareness
+supervisor coordination
 ```
 
-or until a technical hard safety limit is reached.
-
-Project delay is calculated as:
+Relevant outputs include:
 
 ```text
-project_delay_days = actual_project_finish - planned_project_duration
+external_disruptions
+active_external_blockages
+avg_recovery_time
+alternative_task_switches
+failed_task_switches
+external_idle_time_hours_per_day
+external_idle_time_hours_per_active_crew_day
+supervisor_recovery_interventions
 ```
 
-with zero as the minimum value.
+## Main output metrics
 
-## Main outputs
-
-### Production and schedule metrics
+### Production and schedule
 
 | Metric | Meaning |
 |---|---|
 | `completed_tasks` | Number of completed tasks. |
 | `remaining_tasks` | Number of unfinished tasks. |
-| `actual_project_finish` | Actual final completion day if all tasks are complete. |
+| `actual_project_finish` | Actual final completion day when all tasks are complete. |
 | `project_delay_days` | Delay relative to planned project duration. |
-| `avg_lateness_days` | Average lateness of tasks. |
-| `late_completed_tasks` | Number of tasks completed after their planned week. |
-| `open_schedule_backlog` | Number of tasks currently behind their planned finish. |
-| `cumulative_plan_failures` | Failed weekly commitments. |
-| `baseline_adherence` | Current week baseline adherence. |
-| `cumulative_schedule_adherence` | Cumulative schedule adherence up to current week. |
+| `avg_weekly_ppc` | Average of weekly PPC values over the observed project period. |
+| `aggregate_ppc` | Total successful weekly promises divided by total weekly promises. |
+| `avg_lateness_days` | Average lateness of completed tasks. |
+| `late_completed_tasks` | Number of tasks completed after planned finish. |
+| `open_schedule_backlog` | Current number of tasks behind planned finish. |
+| `mean_open_schedule_backlog` | Mean open backlog over project time. |
+| `max_open_schedule_backlog` | Maximum open backlog over project time. |
 
-### Situational awareness and DVM metrics
+### Workface and DVM
 
 | Metric | Meaning |
 |---|---|
 | `avg_sa` | Average crew situational awareness. |
-| `workface_picture_quality` | Ready work area / workface picture quality. |
-| `management_picture_quality` | Management-level picture quality. |
-| `workface_gap` | Difference between management and crew/workface picture quality. |
-| `trust_in_data` | Trust in data. |
+| `workface_picture_quality` | Quality of workface-level picture. |
+| `management_picture_quality` | Quality of management-level picture. |
+| `workface_gap` | Difference between management and workface visibility. |
+| `trust_in_data` | Trust in DVM data. |
 | `trust_in_management` | Trust in management. |
-| `avg_adoption` | Average DVM adoption. |
-| `avg_effective_use` | Effective DVM use. |
+| `avg_adoption` | Average adoption of DVM. |
+| `avg_effective_use` | Effective use of DVM. |
+| `avg_make_ready_score` | Current average make-ready score. |
+| `mean_make_ready_score_over_project` | Project-time average make-ready score. |
+| `min_make_ready_score_over_project` | Lowest make-ready score during project. |
 
-### Supervisor metrics
-
-| Metric | Meaning |
-|---|---|
-| `supervisor_total_workload` | Total supervisor workload. |
-| `supervisor_base_workload` | Worker-independent administrative workload. |
-| `supervisor_planning_time` | Time available/used for planning. |
-| `supervisor_reactive_time` | Time used for reactive problem handling. |
-| `firefighting_ratio` | Share of supervisor effort spent in reactive work. |
-| `supervisor_backlog` | Accumulated unresolved supervisor workload. |
-| `cumulative_planning_time` | Cumulative planning time. |
-| `cumulative_reactive_time` | Cumulative reactive time. |
-
-### Disruption and recovery metrics
+### Supervisor
 
 | Metric | Meaning |
 |---|---|
-| `external_disruptions` | Number of external disruptions. |
-| `active_external_blockages` | Currently active external blockages. |
-| `avg_recovery_time` | Average recovery time. |
+| `field_support_utilization` | Share of field-support capacity used. |
+| `field_interaction_capacity_hours_per_day` | Available supervisor field-interaction capacity per day. |
+| `field_interaction_demand_hours_per_day` | Demand for supervisor field interaction per day. |
+| `field_interaction_used_hours_per_day` | Actual field-interaction time used. |
+| `unresolved_field_support_hours_per_day` | Unresolved worker-support demand after available capacity. |
+| `planning_hours_per_supervisor_day` | Planning hours per supervisor day. |
+| `admin_reporting_hours_per_supervisor_day` | Admin/reporting hours per supervisor day. |
+| `supervisor_utilization` | Overall supervisor utilisation. |
+| `supervisor_backlog` | Legacy diagnostic backlog metric. |
+| `firefighting_ratio` | Legacy diagnostic ratio for reactive effort. |
+
+### Idle time and disruptions
+
+| Metric | Meaning |
+|---|---|
+| `idle_time_hours_per_day` | Total idle time per project day. |
+| `idle_time_hours_per_active_crew_day` | Idle hours per active crew day. |
+| `external_idle_time_hours_per_day` | Idle time caused by external disruptions per day. |
+| `external_idle_time_hours_per_active_crew_day` | External disruption idle time per active crew day. |
+| `avg_recovery_time` | Average time to recover from external disruptions. |
 | `alternative_task_switches` | Successful switches to alternative ready work. |
-| `failed_task_switches` | Failed alternative switches. |
-| `idle_time_due_to_external_disruptions` | Waiting caused by external disruptions. |
-| `supervisor_recovery_interventions` | Supervisor interventions for recovery. |
+| `failed_task_switches` | Failed switches to alternative ready work. |
+
+## Scenario comparison
+
+The Scenario comparison tab runs all default scenarios under the same user inputs. This is the recommended mode for comparing DVM configurations because the scenarios are exposed to the same general simulation conditions.
+
+Recommended interpretation:
+
+```text
+Compare relative differences between scenarios, not single absolute values.
+```
+
+Useful comparison metrics:
+
+```text
+actual_project_finish
+project_delay_days
+avg_weekly_ppc
+idle_time_hours_per_active_crew_day
+external_idle_time_hours_per_active_crew_day
+field_support_utilization
+admin_reporting_hours_per_supervisor_day
+cumulative_making_do_starts
+mean_open_schedule_backlog
+```
 
 ## Excel exports
 
-The app exports Excel workbooks with three main sheets:
+The app exports Excel workbooks with sheets such as:
 
 | Sheet | Content |
 |---|---|
 | `metadata` | Run settings and timestamp. |
 | `summary` or `scenario_summary` | Aggregated final metrics. |
 | `final_run_metrics` | One final row per run. |
-| `timeseries` | Full time series of all runs. |
+| `timeseries` | Full time series for each run. |
 
-For scenario comparison, the workbook contains all scenarios in the same file.
+Sensitivity harness exports include additional sheets, for example:
+
+```text
+Run timing
+Screening correlations
+Threshold summary
+```
+
+## Sensitivity harness
+
+The repository may include the standalone sensitivity test harness:
+
+```text
+sensitivity_harness_v8/sensitivity_harness/
+```
+
+The harness runs model batches outside Streamlit and writes CSV, Excel and PNG outputs.
+
+Go to the harness folder:
+
+```powershell
+cd "C:\path\to\sensitivity_harness_v8\sensitivity_harness"
+```
+
+Run interactively:
+
+```powershell
+py run_sensitivity.py --model-dir "C:\path\to\DVM_MESA-simulation_2026-main"
+```
+
+Run a preset directly:
+
+```powershell
+py run_sensitivity.py --model-dir "C:\path\to\DVM_MESA-simulation_2026-main" --preset screening
+```
+
+Useful presets:
+
+| Preset | Purpose |
+|---|---|
+| `smoke` | Quick sanity test. |
+| `screening` | Broader screening run for parameter influence. |
+| `screening_large` | Larger screening run. |
+| `threshold_focus` | Targeted 2D threshold tests. |
+| `standard` | Larger combined test package. |
+| `full` | Extensive test package. |
+| `config` | Use settings from the YAML config file. |
+
+### Targeted threshold tests
+
+The current v8 harness includes these mechanism-focused threshold tests:
+
+| Test | Purpose |
+|---|---|
+| `reporting_burden × autonomy_level` | Identifies when DVM shifts from support to administrative/control burden. |
+| `overcommitment_tendency × commitment_realism` | Tests when unrealistic weekly commitments collapse PPC. |
+| `supervisor_capacity × field_interaction_demand_multiplier` | Tests when supervisor field support becomes a bottleneck. |
+
+The third test requires the v25.7 model patch because it uses:
+
+```text
+field_interaction_demand_multiplier
+```
+
+Default value is `1.0`, so normal behaviour is unchanged unless the sensitivity harness overrides the parameter.
+
+## Typical research workflow
+
+1. Run the Streamlit app locally or in Streamlit Cloud.
+2. Inspect one scenario in the Overview, Time series, Disruptions and Supervisor tabs.
+3. Run Scenario comparison with the same project settings.
+4. Download Excel results.
+5. Run a `smoke` sensitivity test to verify that the local model works.
+6. Run `screening` or `screening_large` to identify influential parameters.
+7. Run `threshold_focus` to inspect selected mechanism thresholds.
+8. Interpret relative scenario differences and mechanism behaviour.
+9. Document model version, parameter values, random seed, number of runs and planned project duration.
+10. Avoid interpreting the model as a validated forecast unless empirical calibration has been performed.
+
+## Model interpretation
+
+The model should be used to reason about patterns such as:
+
+- whether crew-facing DVM improves PPC and reduces project delay;
+- whether management-only dashboards improve visibility without improving workface reliability;
+- whether forced reporting increases administrative workload and supervisor utilisation;
+- whether autonomy and task relevance reduce unnecessary supervisor field-support demand;
+- whether overcommitment undermines PPC;
+- whether resource fit dominates project duration;
+- whether making-do activates under poor make-ready conditions;
+- whether external disruption idle time can be reduced through alternative ready-work switching.
+
+The most credible outputs are comparative and directional, not exact forecasts.
 
 ## Development notes
 
-### Versioning
+### Cache versioning
 
-The app uses an internal cache version string:
+After any structural change to model reporters, scenario fields, dataclasses or result columns, update:
 
 ```python
 APP_DATA_VERSION = "..."
 ```
 
-After model or scenario changes, update this string. Otherwise Streamlit may reuse cached data from an older model version.
-
-### Streamlit cache
-
-The app uses cached functions for loading scenarios and running simulations. After changing dataclass fields, scenario fields, model reporters or output columns, clear cache and reboot in Streamlit Cloud.
+Then clear Streamlit cache.
 
 ### Scenario compatibility
 
-The app contains fallback logic to rebuild older cached `Scenario` objects if fields are missing. This prevents crashes after scenario dataclass updates.
+The app contains fallback logic for older cached scenario objects and missing result columns. This prevents UI crashes during development but may hide whether a metric is produced by the model or added later as a fallback. If a new metric stays zero in all runs, check the model reporters and not only the UI.
 
-### UI fallback columns
+### Updating files
 
-The app also contains fallback column creation to prevent crashes when older cached result tables lack newer metrics. This is useful during development, but it can hide whether a new model reporter is actually producing values. If a new metric stays exactly zero in all runs, check whether it is produced by the model or added later by UI fallback logic.
+Typical Git workflow:
 
-## Model limitations
-
-This is an exploratory model. Important limitations include:
-
-- Parameters are illustrative and require calibration.
-- The model is not validated against a specific real project.
-- Tasks are simplified weekly-sized work packages.
-- Trade logic is stylized.
-- Human behaviour is represented through simplified parameterized rules.
-- PPC, make-ready, situational awareness and trust are model constructs, not direct empirical measurements.
-- Results should be interpreted comparatively, not as exact forecasts.
-
-## Suggested interpretation
-
-Use the model to compare patterns rather than single numbers.
-
-Useful questions include:
-
-- Does a scenario reduce carryover and backlog?
-- Does DVM improve make-ready quality?
-- Does it reduce supervisor firefighting?
-- Does it increase crew situational awareness?
-- Does it support alternative task switching after disruptions?
-- Does it reduce project delay?
-- Does PPC move consistently with project completion?
-
-The most useful result is usually the relative difference between scenarios under the same assumptions.
-
-## Typical workflow
-
-1. Select a scenario.
-2. Set planned project duration and number of runs.
-3. Adjust DVM, autonomy, reporting burden and resource parameters if needed.
-4. Run the simulation.
-5. Inspect overview and time series.
-6. Download Excel.
-7. Run scenario comparison.
-8. Compare PPC, delay, backlog, supervisor workload and recovery metrics.
-9. Calibrate parameters if needed.
-10. Document assumptions before interpreting results.
-
-## Updating the model
-
-A typical update workflow:
-
-```bash
+```powershell
 git status
-git add app.py dvm_abm/model.py dvm_abm/scenarios.py config/scenarios.yaml
-git commit -m "Describe model update"
+git add app.py dvm_abm/model.py dvm_abm/agents.py dvm_abm/scenarios.py config/scenarios.yaml
+git commit -m "Update DVM ABM model"
 git push
 ```
 
-Then in Streamlit Community Cloud:
+Then in Streamlit Cloud:
 
 ```text
 Manage app → Clear cache → Reboot
 ```
 
-## Research use
+## Limitations
 
-When using results in research, report at least:
+This is an exploratory simulation model.
 
-- model version
-- scenario parameter values
-- number of runs
-- planned project duration
-- random seed
-- disruption probability
-- main assumptions about task sizing and PPC
-- whether results are exploratory or calibrated
+Important limitations:
 
-Avoid presenting the model output as validated prediction unless it has been calibrated and tested against empirical project data.
+- Parameters are stylised and require calibration.
+- The model is not validated against a specific real project.
+- Tasks are simplified weekly-sized work packages.
+- Trade and crew behaviour are simplified.
+- Human behaviour, trust, autonomy and surveillance are represented through parameterised rules.
+- PPC and make-ready are model constructs rather than direct empirical observations.
+- Supervisor time allocation is empirically anchored but not project-specifically measured.
+- Making-do consequences are still exploratory and may require stronger calibration.
+- Results should be reported as simulated patterns, not as measured construction productivity effects.
 
-## Current conceptual status
+## AI use and verification
 
-The current model structure represents:
+If the repository includes an AI-use disclosure file, it can be placed at:
 
 ```text
-DVM scenario
-→ information quality and access
-→ situational awareness
-→ make-ready quality
-→ weekly completion promises
-→ PPC
-→ backlog and carryover
-→ supervisor workload and firefighting
-→ disruption recovery
+AI_USE_AND_VERIFICATION.md
+```
+
+Recommended disclosure:
+
+```text
+Generative AI tools were used as research support during the study, particularly for drafting and debugging Python code, documenting model parameters, designing visualisations, structuring the sensitivity testing workflow, and preparing preliminary text drafts. All AI-generated suggestions were reviewed, modified, and verified by the author. The author remains fully responsible for the model design, methodological choices, analysis, interpretation of results, and final manuscript.
+```
+
+## References for model assumptions
+
+The model draws conceptually on the following research streams:
+
+- Last Planner System and Percent Plan Complete.
+- Lean construction, make-ready planning and production reliability.
+- Making-do and constraint management.
+- Construction site management and supervisor time allocation.
+- Situational awareness and visual management.
+- Agent-based modelling and sensitivity analysis.
+
+Suggested project-specific references include:
+
+- Lappalainen et al. (2023): Planned Percentage Completed in Construction — a quantitative review of literature.
+- Marjasalo, Koskenvesa, Tolonen & Koskela: Time allocation of site management.
+- Shohet & Laufer (1991): What does the construction foreman do?
+- Grimm et al.: ODD protocol and agent-based model documentation.
+- Saltelli et al.: Sensitivity analysis.
+- Ligmann-Zielinska et al. and Borgonovo et al.: sensitivity analysis in agent-based modelling.
+
+## Current conceptual chain
+
+The simplified causal logic of the current model is:
+
+```text
+DVM configuration
+→ information quality, access and task relevance
+→ crew situational awareness and trust
+→ make-ready quality and sound commitments
+→ weekly PPC
+→ carryover, backlog and idle time
+→ supervisor field support and planning capacity
+→ disruption recovery and alternative task switching
 → actual project completion
 ```
 
-This causal chain is intentionally simplified, but it provides a basis for experimenting with how digital visual management may influence construction production reliability.
+A central modelling assumption is that DVM is not inherently beneficial. Its effect depends on whether it supports workface decisions and make-ready reliability or instead adds reporting burden, surveillance pressure and management-centred visibility without improving crew actionability.

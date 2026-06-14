@@ -64,11 +64,32 @@ class DVMConstructionModel(Model):
         self.workload_pressure=0.0
         self.active_crews=[]
         self.active_crew_trades_today=""
+        # v25.3: interpretation and aggregation helpers for sensitivity testing.
+        # One model time unit is treated as one workday; crew idle-time counters
+        # are therefore converted to hours with workday_hours.
+        self.workday_hours=8.0
+        self.daily_idle_time=0.0
+        self.daily_idle_time_external=0.0
+        self.cumulative_active_crew_days=0.0
+        self.trade_supervisor_count_today=0
+        self.site_manager_count_today=1
+        self.supervisor_count_today=1
+        self.supervisor_capacity_per_person=float(getattr(self.dvm_scenario,"supervisor_capacity",8.0))
+        self.effective_supervisor_capacity_today=self.supervisor_capacity_per_person
+        self.cumulative_open_schedule_backlog=0.0
+        self.max_open_schedule_backlog=0.0
+        self.cumulative_make_ready_score=0.0
+        self.min_make_ready_score=1.0
+        self.cumulative_supervisor_backlog=0.0
+        self.max_supervisor_backlog=0.0
+        self.cumulative_firefighting_ratio=0.0
+        self.max_firefighting_ratio=0.0
         self.hard_limit_reached=False
         self.tasks=[]; self.crews=[]; self._create_project(number_of_tasks)
         self._build_workload_and_resource_curves()
         self.planned_project_finish=float(self.planned_project_duration)
         self.baseline_last_planned_task_finish=max((self._planned_finish(t) for t in self.tasks), default=0.0)
+        self.min_make_ready_score=self.avg_make_ready_score if self.tasks else 0.0
         self.datacollector=DataCollector(model_reporters=self._reporters()); self.datacollector.collect(self)
     def _sample_workload_ratio(self):
         """Sample a planned task timing ratio in [0, 1] from the workload curve."""
@@ -194,7 +215,13 @@ class DVMConstructionModel(Model):
             "active_crew_trades_today": lambda m: m.active_crew_trades_today,
             "planned_workload_today": lambda m: m.planned_workload_today,
             "active_crews_today": lambda m: m.active_crews_today,
+            "cumulative_active_crew_days": lambda m: m.cumulative_active_crew_days,
             "available_crew_capacity_today": lambda m: m.available_crew_capacity_today,
+            "trade_supervisor_count_today": lambda m: m.trade_supervisor_count_today,
+            "site_manager_count_today": lambda m: m.site_manager_count_today,
+            "supervisor_count_today": lambda m: m.supervisor_count_today,
+            "effective_supervisor_capacity_today": lambda m: m.effective_supervisor_capacity_today,
+            "supervisor_capacity_per_person": lambda m: m.supervisor_capacity_per_person,
             "workload_pressure": lambda m: m.workload_pressure,
             "baseline_due_tasks_this_week": lambda m: m.planned_tasks_this_week,
             "weekly_committed_tasks": lambda m: m.weekly_committed_tasks,
@@ -223,6 +250,10 @@ class DVMConstructionModel(Model):
             "last_completed_weekly_ppc": lambda m: m.last_completed_weekly_ppc,
             "weekly_carryover": lambda m: m.weekly_carryover,
             "open_schedule_backlog": lambda m: m.open_schedule_backlog,
+            "mean_open_schedule_backlog": lambda m: m.cumulative_open_schedule_backlog/m._elapsed_days_for_rates(),
+            "max_open_schedule_backlog": lambda m: m.max_open_schedule_backlog,
+            "mean_make_ready_score_over_project": lambda m: m.cumulative_make_ready_score/m._elapsed_days_for_rates(),
+            "min_make_ready_score_over_project": lambda m: m.min_make_ready_score,
             "cumulative_plan_failures": lambda m: m.cumulative_plan_failures,
             "project_delay_days": lambda m: m.project_delay_days,
             "avg_lateness_days": lambda m: m.avg_lateness_days,
@@ -251,6 +282,16 @@ class DVMConstructionModel(Model):
             "ready_work_area_gap": lambda m: m.current_picture.workface_gap,
             "total_idle_time": lambda m: sum(c.idle_time for c in m.crews),
             "total_idle_time_external": lambda m: sum(c.idle_time_external for c in m.crews),
+            "daily_idle_time": lambda m: m.daily_idle_time,
+            "daily_idle_time_external": lambda m: m.daily_idle_time_external,
+            "total_idle_time_hours": lambda m: sum(c.idle_time for c in m.crews)*m.workday_hours,
+            "total_idle_time_external_hours": lambda m: sum(c.idle_time_external for c in m.crews)*m.workday_hours,
+            "idle_time_hours_per_day": lambda m: (sum(c.idle_time for c in m.crews)*m.workday_hours)/m._elapsed_days_for_rates(),
+            "external_idle_time_hours_per_day": lambda m: (sum(c.idle_time_external for c in m.crews)*m.workday_hours)/m._elapsed_days_for_rates(),
+            "idle_time_hours_per_active_crew_day": lambda m: (sum(c.idle_time for c in m.crews)*m.workday_hours)/max(1.0,m.cumulative_active_crew_days),
+            "external_idle_time_hours_per_active_crew_day": lambda m: (sum(c.idle_time_external for c in m.crews)*m.workday_hours)/max(1.0,m.cumulative_active_crew_days),
+            "daily_idle_time_hours": lambda m: m.daily_idle_time*m.workday_hours,
+            "daily_external_idle_time_hours": lambda m: m.daily_idle_time_external*m.workday_hours,
             "total_working_time": lambda m: sum(c.working_time for c in m.crews),
             "total_interruptions": lambda m: sum(t.interruptions for t in m.tasks),
             "prevented_interruptions": lambda m: sum(c.prevented_interruptions for c in m.crews),
@@ -265,6 +306,9 @@ class DVMConstructionModel(Model):
             "avg_blockage_resolution_time": lambda m: safe_mean(m.blockage_resolution_times),
             "total_recovery_time": "total_recovery_time",
             "idle_time_due_to_external_disruptions": "idle_time_due_to_external_disruptions",
+            "idle_time_due_to_external_disruptions_hours": lambda m: m.idle_time_due_to_external_disruptions*m.workday_hours,
+            "idle_time_due_to_external_disruptions_hours_per_day": lambda m: (m.idle_time_due_to_external_disruptions*m.workday_hours)/m._elapsed_days_for_rates(),
+            "idle_time_due_to_external_disruptions_hours_per_active_crew_day": lambda m: (m.idle_time_due_to_external_disruptions*m.workday_hours)/max(1.0,m.cumulative_active_crew_days),
             "supervisor_reactive_time": lambda m: m.supervisor.last_reactive_time,
             "supervisor_planning_time": lambda m: m.supervisor.last_planning_time,
             "supervisor_reporting_time": lambda m: m.supervisor.last_reporting_time,
@@ -277,8 +321,12 @@ class DVMConstructionModel(Model):
             "cumulative_planning_shortfall": lambda m: m.supervisor.cumulative_planning_shortfall,
             "supervisor_utilization": lambda m: m.supervisor.last_utilization,
             "supervisor_backlog": lambda m: m.supervisor.backlog,
+            "mean_supervisor_backlog": lambda m: m.cumulative_supervisor_backlog/m._elapsed_days_for_rates(),
+            "max_supervisor_backlog": lambda m: m.max_supervisor_backlog,
             "supervisor_response_delay": lambda m: m.supervisor.last_response_delay,
             "firefighting_ratio": lambda m: m.supervisor.last_firefighting_ratio,
+            "mean_firefighting_ratio": lambda m: m.cumulative_firefighting_ratio/m._elapsed_days_for_rates(),
+            "max_firefighting_ratio": lambda m: m.max_firefighting_ratio,
             "crew_questions": "daily_questions",
             "cumulative_crew_questions": lambda m: m.supervisor.cumulative_questions,
             "unresolved_questions": lambda m: m.supervisor.last_unresolved_questions,
@@ -619,18 +667,65 @@ class DVMConstructionModel(Model):
         self.active_crew_trades_today=",".join(c.trade for c in selected)
         return selected
 
+    def _elapsed_days_for_rates(self):
+        # DataCollector collects before self.day is incremented, so day+1 is a
+        # practical elapsed-days denominator for cumulative h/day indicators.
+        return max(1.0, float(self.day+1))
+
+    def _update_supervisor_staffing(self):
+        """Aggregate supervisor staffing rule.
+
+        v25.3 simplified site-organisation assumption:
+        - one trade supervisor is available for each active discipline/trade;
+        - one site manager is available above trade supervisors;
+        - the site manager is treated as substitutable reserve capacity, so
+          absences are not modelled explicitly.
+
+        The existing SupervisorAgent is retained as an aggregate coordination
+        resource. Its daily capacity is scaled by supervisor_count_today.
+        """
+        active_trades={c.trade for c in getattr(self,"active_crews",[]) if c is not None}
+        self.trade_supervisor_count_today=len(active_trades)
+        self.site_manager_count_today=1 if (self.trade_supervisor_count_today>0 or any(not t.is_done for t in self.tasks)) else 0
+        self.supervisor_count_today=self.trade_supervisor_count_today+self.site_manager_count_today
+        self.effective_supervisor_capacity_today=self.supervisor_count_today*self.supervisor_capacity_per_person
+        if hasattr(self,"supervisor"):
+            self.supervisor.capacity_per_day=self.effective_supervisor_capacity_today
+
+    def _update_period_metrics(self):
+        elapsed=self._elapsed_days_for_rates()
+        backlog=float(self.open_schedule_backlog)
+        self.cumulative_open_schedule_backlog+=backlog
+        self.max_open_schedule_backlog=max(self.max_open_schedule_backlog,backlog)
+        mr=float(self.avg_make_ready_score)
+        self.cumulative_make_ready_score+=mr
+        self.min_make_ready_score=min(self.min_make_ready_score,mr)
+        sb=float(getattr(self.supervisor,"backlog",0.0))
+        self.cumulative_supervisor_backlog+=sb
+        self.max_supervisor_backlog=max(self.max_supervisor_backlog,sb)
+        ff=float(getattr(self.supervisor,"last_firefighting_ratio",0.0))
+        self.cumulative_firefighting_ratio+=ff
+        self.max_firefighting_ratio=max(self.max_firefighting_ratio,ff)
+
     def step(self):
         self.daily_questions=self.daily_escalations=self.daily_coordination_needs=self.daily_recovery_interventions=0; self.daily_external_pressure=0; self.daily_useful=0; self.daily_harmful=0
         self.daily_making_do_starts=0; self.daily_making_do_interruptions=0; self.daily_rework_due_to_making_do=0.0
+        prev_idle=sum(c.idle_time for c in self.crews)
+        prev_idle_external=sum(c.idle_time_external for c in self.crews)
         self._update_daily_load_state()
         self._update_blockages(); self.current_picture=self._picture(); self._update_constraints()
         if self.day % self.week_length == 0:
             self._make_weekly_commitments()
         self._update_readiness()
         self.active_crews=self._active_crews_for_today()
+        self.cumulative_active_crew_days+=len(self.active_crews)
+        self._update_supervisor_staffing()
         for c in list(self.active_crews): c.step()
+        self.daily_idle_time=max(0.0,sum(c.idle_time for c in self.crews)-prev_idle)
+        self.daily_idle_time_external=max(0.0,sum(c.idle_time_external for c in self.crews)-prev_idle_external)
         self.daily_coordination_needs += self._baseline_coordination_needs()
         self.supervisor.process_day(self.daily_questions,self.daily_escalations,self.daily_coordination_needs,self.daily_recovery_interventions,self.daily_external_pressure)
+        self._update_period_metrics()
         self._update_trust(); self.datacollector.collect(self); self.day+=1
         if sum(t.is_done for t in self.tasks)==len(self.tasks): self.running=False
         if self.day>=self.simulation_hard_limit:
@@ -928,6 +1023,11 @@ class DVMConstructionModel(Model):
     def _task(self,i): return next((t for t in self.tasks if t.id==i),None) if i is not None else None
     def _choose_task(self,c):
         cand=[t for t in self.tasks if t.trade==c.trade and t.status==TaskStatus.READY and not t.external_blockage_active and not t.is_done]
+        # v25.3: allow explicitly promised but not-yet-sound tasks to be considered
+        # as risky making-do candidates. Without this, making-do may never activate
+        # because unsound tasks remain outside the READY candidate set.
+        risky=[t for t in self.tasks if t.trade==c.trade and t.committed_week==self.current_week and t.status==TaskStatus.NOT_READY and not t.external_blockage_active and not t.is_done]
+        cand=cand+risky
         if not cand:
             return None
         return max(cand,key=lambda t:

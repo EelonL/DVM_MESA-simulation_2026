@@ -215,6 +215,15 @@ class SupervisorAgent(MesaCompatAgent):
         self.cumulative_escalations = 0
         self.cumulative_recovery_interventions = 0
         self.cumulative_unresolved_questions = 0.0
+        # v25.4: field interaction / worker-support time allocation.
+        # Field interaction is the foreman time spent with crews on site:
+        # supervision, instructions, local problem solving, workface checks and
+        # coordination. It is modelled as a separate capacity from proactive
+        # planning and admin/reporting.
+        self.cumulative_field_interaction_demand = 0.0
+        self.cumulative_field_interaction_used = 0.0
+        self.cumulative_unresolved_field_support = 0.0
+        self.cumulative_admin_reporting_time = 0.0
 
         # Last-day metrics used by DataCollector.
         # These must exist before the first DataCollector.collect().
@@ -233,6 +242,15 @@ class SupervisorAgent(MesaCompatAgent):
         self.last_escalations = 0
         self.last_recovery_interventions = 0
         self.last_unresolved_questions = 0.0
+        self.last_field_interaction_capacity = 0.0
+        self.last_field_interaction_demand = 0.0
+        self.last_field_interaction_used = 0.0
+        self.last_unresolved_field_support_hours = 0.0
+        self.last_field_support_utilization = 0.0
+        self.last_planning_hours_per_supervisor_day = 0.0
+        self.last_field_interaction_hours_per_supervisor_day = 0.0
+        self.last_admin_reporting_hours_per_supervisor_day = 0.0
+        self.last_reactive_hours_per_supervisor_day = 0.0
 
     def process_day(
         self,
@@ -246,17 +264,31 @@ class SupervisorAgent(MesaCompatAgent):
         m = self.model
         r = getattr(m, "py_random", None)
 
-        # Worker-independent supervisor base workload:
-        # reporting to management, invoice/order handling, authority documentation,
-        # meetings and other administrative duties.
+        # v25.4: split the supervisor day into three conceptually different
+        # time budgets:
+        # 1) field interaction / worker support (same-day crew progress),
+        # 2) proactive planning (future make-ready quality),
+        # 3) admin, meetings and reporting (capacity consumed away from field/planning).
+        # The default shares are anchored in the Marjasalo et al. site management
+        # time-allocation study: foremen spend about 40% supervising workers and
+        # 14% planning; general superintendents about 25% supervising and 16% planning.
+        supervisor_count = max(1.0, float(getattr(m, "supervisor_count_today", 1)))
+        capacity_total = float(getattr(m, "effective_supervisor_capacity_today", self.capacity_per_day))
+        field_capacity = float(getattr(m, "field_interaction_capacity_hours_today", capacity_total * 0.35))
+        planning_need = float(getattr(m, "planning_target_hours_today", self.planning_need_per_day))
+        nominal_admin = float(getattr(m, "admin_reporting_nominal_hours_today", 0.0))
+
         variability = 0.0
         if r is not None and self.admin_variability > 0:
             variability = r.normalvariate(0.0, self.admin_variability)
 
-        dvm_reporting_time = s.reporting_burden * self.reporting_time_base
+        dvm_reporting_time = s.reporting_burden * self.reporting_time_base * supervisor_count
+        # Existing scenario load parameters are treated as extra site-level burden;
+        # nominal_admin already contains the role-based "other/admin" share.
         base_workload = max(
             0.0,
-            self.base_admin_load
+            nominal_admin
+            + self.base_admin_load
             + self.management_reporting_load
             + self.procurement_admin_load
             + self.authority_reporting_load
@@ -265,63 +297,80 @@ class SupervisorAgent(MesaCompatAgent):
             + variability,
         )
 
-        reactive = (
+        baseline_field_demand = float(getattr(m, "baseline_field_interaction_demand_hours_today", 0.0))
+        problem_support_demand = (
             questions * self.question_handling_time
             + escalations * self.escalation_handling_time
             + coordination_needs * self.coordination_task_time
             + recovery_interventions * self.recovery_intervention_time
         )
+        field_demand = baseline_field_demand + problem_support_demand
+        field_used = min(field_demand, field_capacity)
+        unresolved_field_support = max(0.0, field_demand - field_capacity)
 
-        backlog_work = min(self.backlog, self.capacity_per_day * 0.35)
-        planning_need = self.planning_need_per_day
+        # Part of previous backlog must also be handled, but this consumes general
+        # capacity rather than today's field interaction budget.
+        backlog_work = min(self.backlog, capacity_total * 0.20)
 
-        available_after_base_and_reactive = max(
+        available_after_base_field_and_backlog = max(
             0.0,
-            self.capacity_per_day - base_workload - reactive - backlog_work,
+            capacity_total - base_workload - field_used - backlog_work,
         )
-        planning = min(planning_need, available_after_base_and_reactive)
+        planning = min(planning_need, available_after_base_field_and_backlog)
         planning_shortfall = max(0.0, planning_need - planning)
 
-        total_actual_work = base_workload + reactive + backlog_work + planning
-        overload = max(0.0, base_workload + reactive + backlog_work - self.capacity_per_day)
-        unresolved = overload / max(self.question_handling_time, 0.01)
+        total_actual_work = base_workload + field_used + backlog_work + planning
+        overload = max(0.0, base_workload + field_demand + backlog_work + planning_need - capacity_total)
+        unresolved = unresolved_field_support / max(self.question_handling_time, 0.01)
 
-        # Backlog grows from true overload and from uncompleted planning work,
-        # but only true overload creates unresolved crew questions.
         spare_after_required = max(
             0.0,
-            self.capacity_per_day - base_workload - reactive - planning,
+            capacity_total - base_workload - field_used - planning,
         )
         backlog_reduction = spare_after_required * 0.20
         self.backlog = max(
             0.0,
-            self.backlog + overload + 0.35 * planning_shortfall - backlog_reduction,
+            self.backlog
+            + 0.75 * unresolved_field_support
+            + 0.35 * planning_shortfall
+            + 0.25 * overload
+            - backlog_reduction,
         )
 
-        self.last_reactive_time = reactive
+        self.last_reactive_time = field_used
         self.last_planning_time = planning
         self.last_reporting_time = dvm_reporting_time
         self.last_base_workload = base_workload
         self.last_planning_need = planning_need
         self.last_planning_shortfall = planning_shortfall
-        self.last_available_planning_capacity = available_after_base_and_reactive
+        self.last_available_planning_capacity = available_after_base_field_and_backlog
         self.last_total_workload = total_actual_work
-        self.last_utilization = total_actual_work / max(self.capacity_per_day, 0.01)
+        self.last_utilization = total_actual_work / max(capacity_total, 0.01)
         self.last_response_delay = (
             0.15
             + s.overload_delay_effect * self.backlog
             + 0.30 * max(0.0, self.last_utilization - 1)
             + 0.08 * planning_shortfall
+            + 0.05 * unresolved_field_support
         )
-        # Firefighting ratio is the share of production-management time that is reactive.
-        # Base administration is reported separately.
-        self.last_firefighting_ratio = reactive / max(reactive + planning, 0.01)
+        # Firefighting ratio now means reactive field-support share of production
+        # management time. Base administration is reported separately.
+        self.last_firefighting_ratio = field_used / max(field_used + planning, 0.01)
         self.last_questions = questions
         self.last_escalations = escalations
         self.last_recovery_interventions = recovery_interventions
         self.last_unresolved_questions = unresolved
+        self.last_field_interaction_capacity = field_capacity
+        self.last_field_interaction_demand = field_demand
+        self.last_field_interaction_used = field_used
+        self.last_unresolved_field_support_hours = unresolved_field_support
+        self.last_field_support_utilization = field_used / max(field_capacity, 0.01)
+        self.last_planning_hours_per_supervisor_day = planning / supervisor_count
+        self.last_field_interaction_hours_per_supervisor_day = field_used / supervisor_count
+        self.last_admin_reporting_hours_per_supervisor_day = base_workload / supervisor_count
+        self.last_reactive_hours_per_supervisor_day = field_used / supervisor_count
 
-        self.cumulative_reactive_time += reactive
+        self.cumulative_reactive_time += field_used
         self.cumulative_planning_time += planning
         self.cumulative_reporting_time += dvm_reporting_time
         self.cumulative_base_workload += base_workload
@@ -330,12 +379,17 @@ class SupervisorAgent(MesaCompatAgent):
         self.cumulative_escalations += escalations
         self.cumulative_recovery_interventions += recovery_interventions
         self.cumulative_unresolved_questions += unresolved
+        self.cumulative_field_interaction_demand += field_demand
+        self.cumulative_field_interaction_used += field_used
+        self.cumulative_unresolved_field_support += unresolved_field_support
+        self.cumulative_admin_reporting_time += base_workload
 
         planning_gain = s.proactive_planning_effect * planning * (1 - m.planning_quality)
         planning_loss = (
-            0.018 * overload
-            + 0.012 * planning_shortfall
+            0.012 * overload
+            + 0.014 * planning_shortfall
             + 0.008 * self.backlog
+            + 0.006 * unresolved_field_support
             + 0.010 * external_pressure
             + 0.004 * s.reporting_burden * (1 - m.trust_in_management)
             + s.planning_decay

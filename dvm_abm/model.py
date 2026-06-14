@@ -76,6 +76,33 @@ class DVMConstructionModel(Model):
         self.supervisor_count_today=1
         self.supervisor_capacity_per_person=float(getattr(self.dvm_scenario,"supervisor_capacity",8.0))
         self.effective_supervisor_capacity_today=self.supervisor_capacity_per_person
+        # v25.4: role-based foreman/site-manager time allocation.
+        # These shares are interpreted as field worker-interaction time and proactive
+        # planning time, not as passive observation. They provide empirical anchors
+        # for the supervisor resource using foreman time-allocation literature.
+        self.trade_supervisor_day_hours=8.0
+        self.site_manager_day_hours=8.2
+        self.trade_supervisor_field_share=0.40
+        self.trade_supervisor_planning_share=0.14
+        self.site_manager_field_share=0.25
+        self.site_manager_planning_share=0.16
+        self.field_interaction_capacity_hours_today=0.0
+        self.field_interaction_demand_hours_today=0.0
+        self.baseline_field_interaction_demand_hours_today=0.0
+        self.unresolved_field_support_hours_today=0.0
+        self.planning_target_hours_today=float(getattr(self.dvm_scenario,"planning_need_per_day",2.0))
+        self.admin_reporting_nominal_hours_today=0.0
+        self.supervisor_field_support_idle_added_today=0.0
+        self.cumulative_unresolved_field_support_hours=0.0
+        self.max_unresolved_field_support_hours=0.0
+        self.cumulative_field_interaction_demand_hours=0.0
+        self.cumulative_field_interaction_used_hours=0.0
+        self.cumulative_field_support_utilization=0.0
+        self.cumulative_planning_hours_per_supervisor_day=0.0
+        self.cumulative_field_interaction_hours_per_supervisor_day=0.0
+        self.cumulative_admin_reporting_hours_per_supervisor_day=0.0
+        self.cumulative_supervisor_count=0.0
+        self.max_supervisor_count=0.0
         self.cumulative_open_schedule_backlog=0.0
         self.max_open_schedule_backlog=0.0
         self.cumulative_make_ready_score=0.0
@@ -222,6 +249,22 @@ class DVMConstructionModel(Model):
             "supervisor_count_today": lambda m: m.supervisor_count_today,
             "effective_supervisor_capacity_today": lambda m: m.effective_supervisor_capacity_today,
             "supervisor_capacity_per_person": lambda m: m.supervisor_capacity_per_person,
+            "field_interaction_capacity_hours_per_day": lambda m: m.field_interaction_capacity_hours_today,
+            "field_interaction_demand_hours_per_day": lambda m: m.field_interaction_demand_hours_today,
+            "baseline_field_interaction_demand_hours_per_day": lambda m: m.baseline_field_interaction_demand_hours_today,
+            "field_interaction_used_hours_per_day": lambda m: m.supervisor.last_field_interaction_used,
+            "field_interaction_hours_per_supervisor_day": lambda m: m.supervisor.last_field_interaction_hours_per_supervisor_day,
+            "field_interaction_hours_per_active_crew_day": lambda m: m.supervisor.last_field_interaction_used/max(1.0,len(getattr(m,"active_crews",[]))),
+            "unresolved_field_support_hours_per_day": lambda m: m.unresolved_field_support_hours_today,
+            "unresolved_field_support_hours_per_active_crew_day": lambda m: m.unresolved_field_support_hours_today/max(1.0,len(getattr(m,"active_crews",[]))),
+            "field_support_utilization": lambda m: m.supervisor.last_field_support_utilization,
+            "mean_field_support_utilization": lambda m: m.cumulative_field_support_utilization/m._elapsed_days_for_rates(),
+            "planning_hours_per_day": lambda m: m.supervisor.last_planning_time,
+            "planning_hours_per_supervisor_day": lambda m: m.supervisor.last_planning_hours_per_supervisor_day,
+            "admin_reporting_hours_per_day": lambda m: m.supervisor.last_base_workload,
+            "admin_reporting_hours_per_supervisor_day": lambda m: m.supervisor.last_admin_reporting_hours_per_supervisor_day,
+            "mean_supervisor_count_over_project": lambda m: m.cumulative_supervisor_count/m._elapsed_days_for_rates(),
+            "max_supervisor_count_over_project": lambda m: m.max_supervisor_count,
             "workload_pressure": lambda m: m.workload_pressure,
             "baseline_due_tasks_this_week": lambda m: m.planned_tasks_this_week,
             "weekly_committed_tasks": lambda m: m.weekly_committed_tasks,
@@ -310,6 +353,7 @@ class DVMConstructionModel(Model):
             "idle_time_due_to_external_disruptions_hours_per_day": lambda m: (m.idle_time_due_to_external_disruptions*m.workday_hours)/m._elapsed_days_for_rates(),
             "idle_time_due_to_external_disruptions_hours_per_active_crew_day": lambda m: (m.idle_time_due_to_external_disruptions*m.workday_hours)/max(1.0,m.cumulative_active_crew_days),
             "supervisor_reactive_time": lambda m: m.supervisor.last_reactive_time,
+            "supervisor_reactive_hours_per_supervisor_day": lambda m: m.supervisor.last_reactive_hours_per_supervisor_day,
             "supervisor_planning_time": lambda m: m.supervisor.last_planning_time,
             "supervisor_reporting_time": lambda m: m.supervisor.last_reporting_time,
             "supervisor_base_workload": lambda m: m.supervisor.last_base_workload,
@@ -673,25 +717,66 @@ class DVMConstructionModel(Model):
         return max(1.0, float(self.day+1))
 
     def _update_supervisor_staffing(self):
-        """Aggregate supervisor staffing rule.
+        """Aggregate supervisor staffing and role-based time budgets.
 
-        v25.3 simplified site-organisation assumption:
-        - one trade supervisor is available for each active discipline/trade;
+        v25.4 interpretation:
+        - each active discipline/trade has one trade supervisor;
         - one site manager is available above trade supervisors;
-        - the site manager is treated as substitutable reserve capacity, so
-          absences are not modelled explicitly.
+        - trade supervisors and site manager have different time-allocation profiles;
+        - field interaction means time spent with crews on site: instructions,
+          workface checks, small problem solving, coordination and supervision.
 
-        The existing SupervisorAgent is retained as an aggregate coordination
-        resource. Its daily capacity is scaled by supervisor_count_today.
+        The model still uses one aggregate SupervisorAgent, but its daily capacity
+        and time budgets are built from these role counts.
         """
         active_trades={c.trade for c in getattr(self,"active_crews",[]) if c is not None}
         self.trade_supervisor_count_today=len(active_trades)
         self.site_manager_count_today=1 if (self.trade_supervisor_count_today>0 or any(not t.is_done for t in self.tasks)) else 0
         self.supervisor_count_today=self.trade_supervisor_count_today+self.site_manager_count_today
-        self.effective_supervisor_capacity_today=self.supervisor_count_today*self.supervisor_capacity_per_person
+
+        trade_hours=self.trade_supervisor_count_today*self.trade_supervisor_day_hours
+        site_hours=self.site_manager_count_today*self.site_manager_day_hours
+        self.effective_supervisor_capacity_today=trade_hours+site_hours
+        self.supervisor_capacity_per_person=(self.effective_supervisor_capacity_today/max(1,self.supervisor_count_today)) if self.supervisor_count_today else 0.0
+
+        self.field_interaction_capacity_hours_today=(
+            trade_hours*self.trade_supervisor_field_share
+            + site_hours*self.site_manager_field_share
+        )
+        self.planning_target_hours_today=max(
+            float(getattr(self.dvm_scenario,"planning_need_per_day",2.0)),
+            trade_hours*self.trade_supervisor_planning_share
+            + site_hours*self.site_manager_planning_share,
+        )
+        # Role-based other/admin/reporting budget. Scenario-level reporting burden
+        # is added on top in SupervisorAgent.process_day.
+        self.admin_reporting_nominal_hours_today=max(
+            0.0,
+            self.effective_supervisor_capacity_today
+            - self.field_interaction_capacity_hours_today
+            - self.planning_target_hours_today,
+        )
+        # Routine field interaction demand: the more active crews and the more
+        # uncertain the workface, the more same-day crew interaction is needed.
+        uncertainty=(
+            .40*(1-self.current_picture.workface_quality)
+            + .30*(1-self.current_picture.readiness_quality)
+            + .20*(1-self.planning_quality)
+            + .10*self.workload_pressure
+        )
+        dvm_self_service=max(0.0,
+            .20*self.dvm_scenario.crew_access
+            + .20*self.dvm_scenario.task_relevance
+            + .15*self.dvm_scenario.autonomy_level
+            - .10*self.dvm_scenario.decision_centralization
+        )
+        demand_per_active_crew=clamp_range(1.15 + 1.10*uncertainty - .55*dvm_self_service, .45, 2.60)
+        self.baseline_field_interaction_demand_hours_today=len(getattr(self,"active_crews",[]))*demand_per_active_crew
+        self.field_interaction_demand_hours_today=self.baseline_field_interaction_demand_hours_today
+        self.unresolved_field_support_hours_today=0.0
+        self.supervisor_field_support_idle_added_today=0.0
         if hasattr(self,"supervisor"):
             self.supervisor.capacity_per_day=self.effective_supervisor_capacity_today
-
     def _update_period_metrics(self):
         elapsed=self._elapsed_days_for_rates()
         backlog=float(self.open_schedule_backlog)
@@ -706,6 +791,18 @@ class DVMConstructionModel(Model):
         ff=float(getattr(self.supervisor,"last_firefighting_ratio",0.0))
         self.cumulative_firefighting_ratio+=ff
         self.max_firefighting_ratio=max(self.max_firefighting_ratio,ff)
+        self.cumulative_supervisor_count+=self.supervisor_count_today
+        self.max_supervisor_count=max(self.max_supervisor_count,self.supervisor_count_today)
+        ufs=float(getattr(self.supervisor,"last_unresolved_field_support_hours",0.0))
+        self.unresolved_field_support_hours_today=ufs
+        self.cumulative_unresolved_field_support_hours+=ufs
+        self.max_unresolved_field_support_hours=max(self.max_unresolved_field_support_hours,ufs)
+        self.cumulative_field_interaction_demand_hours+=float(getattr(self.supervisor,"last_field_interaction_demand",0.0))
+        self.cumulative_field_interaction_used_hours+=float(getattr(self.supervisor,"last_field_interaction_used",0.0))
+        self.cumulative_field_support_utilization+=float(getattr(self.supervisor,"last_field_support_utilization",0.0))
+        self.cumulative_planning_hours_per_supervisor_day+=float(getattr(self.supervisor,"last_planning_hours_per_supervisor_day",0.0))
+        self.cumulative_field_interaction_hours_per_supervisor_day+=float(getattr(self.supervisor,"last_field_interaction_hours_per_supervisor_day",0.0))
+        self.cumulative_admin_reporting_hours_per_supervisor_day+=float(getattr(self.supervisor,"last_admin_reporting_hours_per_supervisor_day",0.0))
 
     def step(self):
         self.daily_questions=self.daily_escalations=self.daily_coordination_needs=self.daily_recovery_interventions=0; self.daily_external_pressure=0; self.daily_useful=0; self.daily_harmful=0
@@ -721,10 +818,20 @@ class DVMConstructionModel(Model):
         self.cumulative_active_crew_days+=len(self.active_crews)
         self._update_supervisor_staffing()
         for c in list(self.active_crews): c.step()
-        self.daily_idle_time=max(0.0,sum(c.idle_time for c in self.crews)-prev_idle)
-        self.daily_idle_time_external=max(0.0,sum(c.idle_time_external for c in self.crews)-prev_idle_external)
         self.daily_coordination_needs += self._baseline_coordination_needs()
         self.supervisor.process_day(self.daily_questions,self.daily_escalations,self.daily_coordination_needs,self.daily_recovery_interventions,self.daily_external_pressure)
+        # If field support demand exceeds the available worker-interaction budget,
+        # part of the unresolved support demand appears immediately as crew waiting.
+        unresolved_support=float(getattr(self.supervisor,"last_unresolved_field_support_hours",0.0))
+        self.field_interaction_demand_hours_today=float(getattr(self.supervisor,"last_field_interaction_demand",self.baseline_field_interaction_demand_hours_today))
+        self.unresolved_field_support_hours_today=unresolved_support
+        if unresolved_support>0 and self.active_crews:
+            idle_units=(unresolved_support/self.workday_hours)/len(self.active_crews)
+            for c in self.active_crews:
+                c.idle_time+=idle_units
+            self.supervisor_field_support_idle_added_today=unresolved_support
+        self.daily_idle_time=max(0.0,sum(c.idle_time for c in self.crews)-prev_idle)
+        self.daily_idle_time_external=max(0.0,sum(c.idle_time_external for c in self.crews)-prev_idle_external)
         self._update_period_metrics()
         self._update_trust(); self.datacollector.collect(self); self.day+=1
         if sum(t.is_done for t in self.tasks)==len(self.tasks): self.running=False
@@ -974,7 +1081,8 @@ class DVMConstructionModel(Model):
                 cur.remaining_duration+=rework; cur.rework_due_to_making_do+=rework; self.daily_rework_due_to_making_do+=rework
                 return
             if self.py_random.random()<self.dvm_scenario.disturbance_probability*(1-.4*self.planning_quality): cur.interruptions+=1; c.escalations+=1; self.daily_escalations+=1; c.idle_time+=1
-            backlog_penalty=clamp_range(1.0-.018*self.open_schedule_backlog-.025*self.supervisor.backlog-.12*self.workload_pressure,.50,1.0)
+            field_support_pressure=clamp_range(float(getattr(self.supervisor,"last_unresolved_field_support_hours",0.0))/max(float(getattr(self,"field_interaction_capacity_hours_today",1.0)),0.01),0.0,2.0)
+            backlog_penalty=clamp_range(1.0-.018*self.open_schedule_backlog-.025*self.supervisor.backlog-.12*self.workload_pressure-.08*field_support_pressure,.45,1.0)
             making_do_penalty=clamp_range(1.0-.45*cur.making_do_active*(1-cur.make_ready_score),.45,1.0)
             progress_factor=clamp_range(.72+.24*sa.comprehension+.20*self.planning_quality+.08*self.current_picture.readiness_quality-.10*self.dvm_scenario.reporting_burden,.45,1.35)
             cur.remaining_duration-=c.productivity*progress_factor*backlog_penalty*making_do_penalty; c.working_time+=1
@@ -1009,6 +1117,7 @@ class DVMConstructionModel(Model):
         comp=.65 if task is None else task.complexity; s=self.dvm_scenario
         backlog_pressure=clamp(self.open_schedule_backlog/max(len(self.tasks),1))
         supervisor_pressure=clamp(self.supervisor.backlog/max(self.supervisor.capacity_per_day,.01))
+        field_support_pressure=clamp_range(float(getattr(self.supervisor,"last_unresolved_field_support_hours",0.0))/max(float(getattr(self,"field_interaction_capacity_hours_today",1.0)),0.01),0.0,2.0)
         uncertainty=(.55*(1-self.current_picture.workface_quality)+.25*(1-self.current_picture.readiness_quality)+.20*(1-self.planning_quality))
         return clamp(
             .04
@@ -1017,6 +1126,7 @@ class DVMConstructionModel(Model):
             + .05*s.reporting_burden*(1-self.trust_in_management)
             + .08*backlog_pressure
             + .05*supervisor_pressure
+            + .04*field_support_pressure
             + .07*getattr(s,"workload_pressure_sensitivity",.6)*self.workload_pressure,
             0,.75
         )

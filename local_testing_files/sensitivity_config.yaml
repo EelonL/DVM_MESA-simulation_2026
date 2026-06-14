@@ -1,0 +1,206 @@
+# Local sensitivity-test configuration for DVM-ABM.
+# You can edit this file and rerun run_sensitivity.py.
+
+general:
+  planned_project_duration: 100
+  base_seed: 20260609
+  runs_per_case: 10
+  daily_shock_probability: 0.32
+  # Use "all" or list scenario names, e.g. [analog_vm, workface_dvm, dvm_lean_autonomous]
+  scenario_filter: all
+  save_timeseries: false
+  max_workers: 1
+
+outputs:
+  export_raw_csv: true
+  make_plots: true
+  key_metrics:
+    - project_delay_days
+    - actual_project_finish
+    - avg_weekly_ppc
+    - last_completed_weekly_ppc
+    - open_schedule_backlog
+    - cumulative_plan_failures
+    - avg_make_ready_score
+    - cumulative_making_do_starts
+    - cumulative_rework_due_to_making_do
+    - supervisor_reactive_time
+    - firefighting_ratio
+    - supervisor_backlog
+    - avg_sa
+    - trust_in_data
+    - trust_in_management
+    - avg_adoption
+    - idle_time_due_to_external_disruptions
+    - alternative_task_switches
+
+parameter_ranges:
+  crew_access: [0.10, 0.95]
+  management_access: [0.10, 0.95]
+  task_relevance: [0.10, 0.95]
+  visual_clarity: [0.10, 0.95]
+  capture_rate: [0.10, 0.95]
+  data_accuracy: [0.45, 0.98]
+  data_timeliness: [0.10, 0.95]
+  reporting_burden: [0.00, 0.95]
+  perceived_surveillance: [0.00, 0.95]
+  decision_centralization: [0.00, 0.95]
+  autonomy_level: [0.05, 0.95]
+  initial_trust_in_data: [0.10, 0.95]
+  initial_trust_in_management: [0.10, 0.95]
+  constraint_screening_strength: [0.10, 0.95]
+  make_ready_threshold: [0.45, 0.95]
+  commitment_realism: [0.10, 0.95]
+  overcommitment_tendency: [0.00, 0.95]
+  making_do_tendency: [0.00, 0.95]
+  making_do_interruption_rate: [0.00, 0.70]
+  making_do_rework_factor: [0.00, 0.80]
+  supervisor_capacity: [4.0, 10.0]
+  supervisor_base_workload: [0.3, 3.0]
+  planning_need_per_day: [0.5, 4.0]
+  peak_underresource_factor: [0.45, 1.05]
+  workload_pressure_sensitivity: [0.0, 1.5]
+
+sanity_cases:
+  - name: baseline
+    description: Original scenario values.
+    overrides: {}
+
+  - name: zero_shocks
+    description: No external daily shocks.
+    daily_shock_probability: 0.0
+    overrides: {}
+
+  - name: perfect_dvm
+    description: High information quality, worker access and autonomy.
+    overrides:
+      capture_rate: 0.95
+      data_accuracy: 0.98
+      data_timeliness: 0.95
+      data_completeness: 0.95
+      integration_level: 0.95
+      crew_access: 0.95
+      visual_clarity: 0.95
+      task_relevance: 0.95
+      readiness_visibility: 0.95
+      task_recommendation_quality: 0.95
+      autonomy_level: 0.95
+      reporting_burden: 0.05
+      perceived_surveillance: 0.05
+
+  - name: high_reporting_burden
+    description: DVM creates reporting load and surveillance experience.
+    overrides:
+      reporting_burden: 0.90
+      perceived_surveillance: 0.90
+      compliance_pressure: 0.90
+      task_relevance: 0.35
+      crew_access: 0.35
+
+  - name: management_only_dashboard
+    description: Management sees the situation, but crews do not get useful workface access.
+    overrides:
+      management_access: 0.95
+      crew_access: 0.15
+      task_relevance: 0.20
+      visual_clarity: 0.35
+      autonomy_level: 0.20
+      decision_centralization: 0.85
+
+  - name: low_resource_fit
+    description: Resource peak is underdimensioned relative to workload.
+    overrides:
+      peak_underresource_factor: 0.50
+      max_active_crews: 5
+      workload_pressure_sensitivity: 1.20
+
+  - name: strict_make_ready
+    description: Only high-readiness tasks should be promised or started.
+    overrides:
+      make_ready_threshold: 0.90
+      constraint_screening_strength: 0.90
+      making_do_tendency: 0.05
+
+  - name: loose_make_ready_high_making_do
+    description: Tasks are started with weak readiness and high making-do tendency.
+    overrides:
+      make_ready_threshold: 0.50
+      constraint_screening_strength: 0.25
+      making_do_tendency: 0.85
+      making_do_interruption_rate: 0.55
+      making_do_rework_factor: 0.60
+
+ofat:
+  enabled: true
+  runs_per_case: 10
+  relative_levels: [-0.30, -0.15, 0.0, 0.15, 0.30]
+  parameters:
+    - crew_access
+    - management_access
+    - task_relevance
+    - visual_clarity
+    - capture_rate
+    - data_accuracy
+    - data_timeliness
+    - reporting_burden
+    - perceived_surveillance
+    - decision_centralization
+    - autonomy_level
+    - initial_trust_in_data
+    - initial_trust_in_management
+    - constraint_screening_strength
+    - make_ready_threshold
+    - commitment_realism
+    - overcommitment_tendency
+    - making_do_tendency
+    - making_do_interruption_rate
+    - making_do_rework_factor
+    - supervisor_capacity
+    - supervisor_base_workload
+    - planning_need_per_day
+    - peak_underresource_factor
+    - workload_pressure_sensitivity
+
+threshold_tests:
+  enabled: true
+  runs_per_case: 5
+  grid_values_01: [0.10, 0.30, 0.50, 0.70, 0.90]
+  tests:
+    - name: crew_access_x_management_access
+      x: crew_access
+      y: management_access
+    - name: reporting_burden_x_autonomy
+      x: reporting_burden
+      y: autonomy_level
+    - name: task_relevance_x_data_accuracy
+      x: task_relevance
+      y: data_accuracy
+    - name: surveillance_x_trust
+      x: perceived_surveillance
+      y: initial_trust_in_management
+    - name: constraint_screening_x_making_do
+      x: constraint_screening_strength
+      y: making_do_tendency
+
+screening:
+  enabled: true
+  n_samples: 150
+  runs_per_sample: 3
+  parameters:
+    - crew_access
+    - management_access
+    - task_relevance
+    - capture_rate
+    - data_accuracy
+    - data_timeliness
+    - reporting_burden
+    - perceived_surveillance
+    - decision_centralization
+    - autonomy_level
+    - constraint_screening_strength
+    - commitment_realism
+    - overcommitment_tendency
+    - making_do_tendency
+    - supervisor_capacity
+    - peak_underresource_factor
+    - workload_pressure_sensitivity

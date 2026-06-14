@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v25_3_idle_supervisor_sensitivity"
+APP_DATA_VERSION = "v25_4_field_interaction_supervisor_time"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -429,6 +429,20 @@ FRIENDLY_METRIC_NAMES = {
     "avg_adoption": "Average adoption",
     "avg_effective_use": "Average effective DVM use",
     "supervisor_utilization": "Supervisor utilization",
+    "field_interaction_capacity_hours_per_day": "Field interaction capacity, h/day",
+    "field_interaction_demand_hours_per_day": "Field interaction demand, h/day",
+    "field_interaction_used_hours_per_day": "Field interaction used, h/day",
+    "field_interaction_hours_per_supervisor_day": "Field interaction, h/supervisor day",
+    "field_interaction_hours_per_active_crew_day": "Field interaction, h/active crew day",
+    "unresolved_field_support_hours_per_day": "Unresolved field support, h/day",
+    "unresolved_field_support_hours_per_active_crew_day": "Unresolved field support, h/active crew day",
+    "field_support_utilization": "Field support utilization",
+    "mean_field_support_utilization": "Mean field support utilization",
+    "planning_hours_per_day": "Planning, h/day",
+    "planning_hours_per_supervisor_day": "Planning, h/supervisor day",
+    "admin_reporting_hours_per_day": "Admin/reporting, h/day",
+    "admin_reporting_hours_per_supervisor_day": "Admin/reporting, h/supervisor day",
+
     "planned_workload_today": "Planned tasks due today",
     "active_crews_today": "Active crews",
     "available_crew_capacity_today": "Available crew capacity",
@@ -601,6 +615,23 @@ def ensure_v24_columns(df: pd.DataFrame) -> pd.DataFrame:
         "supervisor_planning_need",
         "supervisor_planning_shortfall",
         "supervisor_available_planning_capacity",
+        "field_interaction_capacity_hours_per_day",
+        "field_interaction_demand_hours_per_day",
+        "baseline_field_interaction_demand_hours_per_day",
+        "field_interaction_used_hours_per_day",
+        "field_interaction_hours_per_supervisor_day",
+        "field_interaction_hours_per_active_crew_day",
+        "unresolved_field_support_hours_per_day",
+        "unresolved_field_support_hours_per_active_crew_day",
+        "field_support_utilization",
+        "mean_field_support_utilization",
+        "planning_hours_per_day",
+        "planning_hours_per_supervisor_day",
+        "admin_reporting_hours_per_day",
+        "admin_reporting_hours_per_supervisor_day",
+        "mean_supervisor_count_over_project",
+        "max_supervisor_count_over_project",
+        "supervisor_reactive_hours_per_supervisor_day",
         "cumulative_base_workload",
         "cumulative_planning_shortfall",
         "planned_workload_today",
@@ -1287,10 +1318,10 @@ with tab_supervisor:
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Firefighting ratio", f"{display_metric(df_final, 'firefighting_ratio'):.1%}")
-    c2.metric("Supervisor utilization", f"{display_metric(df_final, 'supervisor_utilization'):.1%}")
-    c3.metric("Base workload", f"{display_metric(df_final, 'supervisor_base_workload'):.1f} h/d")
-    c4.metric("Planning shortfall", f"{display_metric(df_final, 'cumulative_planning_shortfall'):.1f} h")
-    c5.metric("Backlog", f"{display_metric(df_final, 'supervisor_backlog'):.2f} h")
+    c2.metric("Field support util.", f"{display_metric(df_final, 'field_support_utilization'):.1%}")
+    c3.metric("Field interaction", f"{display_metric(df_final, 'field_interaction_hours_per_supervisor_day'):.1f} h/sup d")
+    c4.metric("Planning", f"{display_metric(df_final, 'planning_hours_per_supervisor_day'):.1f} h/sup d")
+    c5.metric("Unresolved support", f"{display_metric(df_final, 'unresolved_field_support_hours_per_day'):.1f} h/d")
 
     st.divider()
 
@@ -1298,10 +1329,12 @@ with tab_supervisor:
 
     with col_a:
         supervisor_time_cols = [
-            "cumulative_base_workload",
-            "cumulative_reactive_time",
-            "cumulative_planning_time",
-            "cumulative_planning_shortfall",
+            "field_interaction_capacity_hours_per_day",
+            "field_interaction_demand_hours_per_day",
+            "field_interaction_used_hours_per_day",
+            "unresolved_field_support_hours_per_day",
+            "planning_hours_per_day",
+            "admin_reporting_hours_per_day",
         ]
         available_time_cols = [c for c in supervisor_time_cols if c in df_ts.columns]
         sup_agg = df_ts.groupby("day", observed=True)[available_time_cols].mean().reset_index()

@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v25_2_planned_baseline_alignment"
+APP_DATA_VERSION = "v25_3_idle_supervisor_sensitivity"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────

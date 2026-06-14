@@ -99,7 +99,7 @@ PLOTLY_LAYOUT = dict(
     ),
 )
 
-APP_DATA_VERSION = "v25_5_supervisor_time_calibration"
+APP_DATA_VERSION = "v25_8_supervisor_visualization_update"
 
 
 # ── Helper functions ───────────────────────────────────────────────────────────
@@ -1323,87 +1323,127 @@ with tab_supervisor:
     c4.metric("Planning", f"{display_metric(df_final, 'planning_hours_per_supervisor_day'):.1f} h/sup d")
     c5.metric("Unresolved support", f"{display_metric(df_final, 'unresolved_field_support_hours_per_day'):.1f} h/d")
 
+    st.caption(
+        "Supervisor time is now shown as daily field interaction, planning and admin/reporting time. "
+        "The older cumulative workload/backlog charts are kept out of the main view because the "
+        "current model uses time-allocation and field-support-utilization metrics instead."
+    )
+
     st.divider()
 
     col_a, col_b = st.columns(2)
 
     with col_a:
-        supervisor_time_cols = [
-            "field_interaction_capacity_hours_per_day",
-            "field_interaction_demand_hours_per_day",
+        time_series_cols = [
             "field_interaction_used_hours_per_day",
-            "unresolved_field_support_hours_per_day",
             "planning_hours_per_day",
             "admin_reporting_hours_per_day",
         ]
-        available_time_cols = [c for c in supervisor_time_cols if c in df_ts.columns]
-        sup_agg = df_ts.groupby("day", observed=True)[available_time_cols].mean().reset_index()
-        fig_sup = go.Figure()
-        if "cumulative_base_workload" in sup_agg.columns:
-            fig_sup.add_trace(
-                go.Scatter(
-                    x=sup_agg["day"],
-                    y=sup_agg["cumulative_base_workload"],
-                    name="Base workload",
-                    mode="lines",
-                    line=dict(color="#888780", width=2),
-                )
+        optional_cols = [
+            "field_interaction_capacity_hours_per_day",
+            "field_interaction_demand_hours_per_day",
+        ]
+        available_time_cols = [c for c in time_series_cols + optional_cols if c in df_ts.columns]
+
+        fig_time = go.Figure()
+        if df_ts.empty or "day" not in df_ts.columns or not available_time_cols:
+            fig_time.update_layout(
+                title="Supervisor time allocation over time",
+                xaxis_title="Day",
+                yaxis_title="Hours/day",
+                **PLOTLY_LAYOUT,
             )
-        if "cumulative_reactive_time" in sup_agg.columns:
-            fig_sup.add_trace(
-                go.Scatter(
-                    x=sup_agg["day"],
-                    y=sup_agg["cumulative_reactive_time"],
-                    name="Reactive time",
-                    mode="lines",
-                    line=dict(color="#D85A30", width=2),
-                )
+            fig_time.add_annotation(
+                text="Supervisor time-allocation metrics are not available in the current simulation data.",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
             )
-        if "cumulative_planning_time" in sup_agg.columns:
-            fig_sup.add_trace(
-                go.Scatter(
-                    x=sup_agg["day"],
-                    y=sup_agg["cumulative_planning_time"],
-                    name="Planning time",
-                    mode="lines",
-                    line=dict(color="#1D9E75", width=2),
+        else:
+            sup_agg = df_ts.groupby("day", observed=True)[available_time_cols].mean().reset_index()
+
+            if "field_interaction_used_hours_per_day" in sup_agg.columns:
+                fig_time.add_trace(
+                    go.Scatter(
+                        x=sup_agg["day"],
+                        y=sup_agg["field_interaction_used_hours_per_day"],
+                        name="Field interaction used",
+                        mode="lines",
+                        line=dict(color="#D85A30", width=2),
+                    )
                 )
-            )
-        if "cumulative_planning_shortfall" in sup_agg.columns:
-            fig_sup.add_trace(
-                go.Scatter(
-                    x=sup_agg["day"],
-                    y=sup_agg["cumulative_planning_shortfall"],
-                    name="Planning shortfall",
-                    mode="lines",
-                    line=dict(color="#BA7517", width=2, dash="dash"),
+            if "planning_hours_per_day" in sup_agg.columns:
+                fig_time.add_trace(
+                    go.Scatter(
+                        x=sup_agg["day"],
+                        y=sup_agg["planning_hours_per_day"],
+                        name="Planning",
+                        mode="lines",
+                        line=dict(color="#1D9E75", width=2),
+                    )
                 )
+            if "admin_reporting_hours_per_day" in sup_agg.columns:
+                fig_time.add_trace(
+                    go.Scatter(
+                        x=sup_agg["day"],
+                        y=sup_agg["admin_reporting_hours_per_day"],
+                        name="Admin/reporting",
+                        mode="lines",
+                        line=dict(color="#888780", width=2),
+                    )
+                )
+            if "field_interaction_capacity_hours_per_day" in sup_agg.columns:
+                fig_time.add_trace(
+                    go.Scatter(
+                        x=sup_agg["day"],
+                        y=sup_agg["field_interaction_capacity_hours_per_day"],
+                        name="Field support capacity",
+                        mode="lines",
+                        line=dict(color="#BA7517", width=1.5, dash="dash"),
+                    )
+                )
+            if "field_interaction_demand_hours_per_day" in sup_agg.columns:
+                fig_time.add_trace(
+                    go.Scatter(
+                        x=sup_agg["day"],
+                        y=sup_agg["field_interaction_demand_hours_per_day"],
+                        name="Field support demand",
+                        mode="lines",
+                        line=dict(color="#6B6ECF", width=1.5, dash="dot"),
+                    )
+                )
+
+            fig_time.update_layout(
+                title="Supervisor time allocation over time",
+                xaxis_title="Day",
+                yaxis_title="Hours/day",
+                legend_title="Metric",
+                **PLOTLY_LAYOUT,
             )
-        fig_sup.update_layout(
-            title="Cumulative supervisor workload",
-            xaxis_title="Day",
-            yaxis_title="Hours",
-            **PLOTLY_LAYOUT,
-        )
-        st.plotly_chart(fig_sup, use_container_width=True)
+        st.plotly_chart(fig_time, use_container_width=True)
 
     with col_b:
-        fig_ff = line_mean_by_day(
+        fig_field_util = line_mean_by_day(
             df_ts,
-            metric="firefighting_ratio",
-            title="Firefighting ratio over time",
+            metric="field_support_utilization",
+            title="Field support utilization over time",
             color="#D85A30",
-            y_title="Ratio",
+            y_title="Utilization",
         )
-        fig_ff.add_hline(
-            y=0.5,
+        fig_field_util.add_hline(
+            y=0.8,
             line_dash="dash",
             line_color="#888780",
-            annotation_text="50% threshold",
+            annotation_text="80% high-load threshold",
             annotation_position="top right",
         )
-        fig_ff.update_yaxes(range=[0, 1])
-        st.plotly_chart(fig_ff, use_container_width=True)
+        fig_field_util.add_hline(
+            y=1.0,
+            line_dash="dot",
+            line_color="#888780",
+            annotation_text="Capacity limit",
+            annotation_position="bottom right",
+        )
+        fig_field_util.update_yaxes(range=[0, 1.05])
+        st.plotly_chart(fig_field_util, use_container_width=True)
 
     col_c, col_d = st.columns(2)
 
@@ -1419,15 +1459,43 @@ with tab_supervisor:
         st.plotly_chart(fig_planning, use_container_width=True)
 
     with col_d:
-        fig_backlog = line_mean_by_day(
+        fig_unresolved = line_mean_by_day(
             df_ts,
-            metric="supervisor_backlog",
-            title="Supervisor backlog over time",
-            color=color,
-            y_title="Backlog",
+            metric="unresolved_field_support_hours_per_day",
+            title="Unresolved field support over time",
+            color="#BA7517",
+            y_title="Hours/day",
         )
-        st.plotly_chart(fig_backlog, use_container_width=True)
+        st.plotly_chart(fig_unresolved, use_container_width=True)
 
+    with st.expander("Diagnostics: legacy supervisor backlog and firefighting ratio"):
+        diag_a, diag_b = st.columns(2)
+        with diag_a:
+            fig_ff = line_mean_by_day(
+                df_ts,
+                metric="firefighting_ratio",
+                title="Firefighting ratio over time",
+                color="#D85A30",
+                y_title="Ratio",
+            )
+            fig_ff.add_hline(
+                y=0.5,
+                line_dash="dash",
+                line_color="#888780",
+                annotation_text="50% threshold",
+                annotation_position="top right",
+            )
+            fig_ff.update_yaxes(range=[0, 1])
+            st.plotly_chart(fig_ff, use_container_width=True)
+        with diag_b:
+            fig_backlog = line_mean_by_day(
+                df_ts,
+                metric="supervisor_backlog",
+                title="Supervisor backlog over time",
+                color=color,
+                y_title="Backlog",
+            )
+            st.plotly_chart(fig_backlog, use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 5 — Scenario comparison
@@ -1485,6 +1553,7 @@ with tab_compare:
 
         preferred_compare_metrics = [
             "avg_weekly_ppc",
+            "aggregate_ppc",
             "last_completed_weekly_ppc",
             "open_schedule_backlog",
             "cumulative_plan_failures",

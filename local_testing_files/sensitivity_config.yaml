@@ -11,6 +11,7 @@ outputs:
   - project_delay_days
   - actual_project_finish
   - avg_weekly_ppc
+  - aggregate_ppc
   - last_completed_weekly_ppc
   - open_schedule_backlog
   - mean_open_schedule_backlog
@@ -30,6 +31,22 @@ outputs:
   - max_supervisor_backlog
   - supervisor_count_today
   - effective_supervisor_capacity_today
+  - supervisor_utilization
+  - admin_reporting_hours_per_supervisor_day
+  - admin_reporting_hours_per_day
+  - planning_hours_per_supervisor_day
+  - planning_hours_per_day
+  - mean_field_support_utilization
+  - field_support_utilization
+  - unresolved_field_support_hours_per_active_crew_day
+  - unresolved_field_support_hours_per_day
+  - field_interaction_hours_per_active_crew_day
+  - field_interaction_hours_per_supervisor_day
+  - field_interaction_used_hours_per_day
+  - field_interaction_demand_hours_per_day
+  - field_interaction_capacity_multiplier
+  - site_manager_supervisor_coordination_hours_per_day
+  - field_interaction_capacity_hours_per_day
   - avg_sa
   - trust_in_data
   - trust_in_management
@@ -120,6 +137,9 @@ parameter_ranges:
   workload_pressure_sensitivity:
   - 0.0
   - 1.5
+  field_interaction_demand_multiplier:
+  - 0.5
+  - 3.0
 sanity_cases:
 - name: baseline
   description: Original scenario values.
@@ -231,31 +251,70 @@ ofat:
   runs_per_case: 1
 threshold_tests:
   enabled: false
-  runs_per_case: 1
+  runs_per_case: 3
   grid_values_01:
   - 0.1
+  - 0.3
   - 0.5
+  - 0.7
   - 0.9
   tests:
-  - name: crew_access_x_management_access
-    x: crew_access
-    y: management_access
   - name: reporting_burden_x_autonomy
     x: reporting_burden
     y: autonomy_level
-  - name: task_relevance_x_data_accuracy
-    x: task_relevance
-    y: data_accuracy
-  - name: surveillance_x_trust
-    x: perceived_surveillance
-    y: initial_trust_in_management
-  - name: constraint_screening_x_making_do
-    x: constraint_screening_strength
-    y: making_do_tendency
+    x_values:
+    - 0.05
+    - 0.25
+    - 0.45
+    - 0.65
+    - 0.85
+    - 0.95
+    y_values:
+    - 0.05
+    - 0.25
+    - 0.45
+    - 0.65
+    - 0.85
+    - 0.95
+  - name: overcommitment_x_commitment_realism
+    x: overcommitment_tendency
+    y: commitment_realism
+    x_values:
+    - 0.0
+    - 0.2
+    - 0.4
+    - 0.6
+    - 0.8
+    - 0.95
+    y_values:
+    - 0.1
+    - 0.3
+    - 0.5
+    - 0.7
+    - 0.9
+    - 0.95
+  - name: field_capacity_x_field_demand
+    x: field_interaction_capacity_multiplier
+    y: field_interaction_demand_multiplier
+    x_values:
+    - 0.5
+    - 0.75
+    - 1.0
+    - 1.25
+    - 1.5
+    - 1.75
+    - 2.0
+    y_values:
+    - 0.5
+    - 1.0
+    - 1.5
+    - 2.0
+    - 2.5
+    - 3.0
 screening:
   enabled: true
-  n_samples: 20
-  runs_per_sample: 1
+  n_samples: 80
+  runs_per_sample: 2
   parameters:
   - crew_access
   - management_access
@@ -272,5 +331,6 @@ screening:
   - overcommitment_tendency
   - making_do_tendency
   - supervisor_capacity
+  - field_interaction_capacity_multiplier
   - peak_underresource_factor
   - workload_pressure_sensitivity

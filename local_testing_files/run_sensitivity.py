@@ -1,8 +1,11 @@
 """
 Local sensitivity-test harness for the DVM-ABM model.
 
+Version v8 adds targeted threshold tests for DVM support vs control, LPS commitment realism,
+and supervisor field-interaction bottlenecks.
+
 Usage examples, Windows PowerShell:
-    py run_sensitivity.py
+    py run_sensitivity.py        # asks model folder and run-size preset interactively
     py run_sensitivity.py --model-dir "C:\\path\\to\\dvm_mesa-simulation_2026"
     py run_sensitivity.py --model-dir "C:\\path\\to\\model" --mode sanity
     py run_sensitivity.py --model-dir "C:\\path\\to\\model" --mode ofat --config sensitivity_config.yaml
@@ -48,6 +51,7 @@ DEFAULT_KEY_METRICS = [
     "project_delay_days",
     "actual_project_finish",
     "avg_weekly_ppc",
+    "aggregate_ppc",
     "last_completed_weekly_ppc",
     "open_schedule_backlog",
     "mean_open_schedule_backlog",
@@ -67,6 +71,19 @@ DEFAULT_KEY_METRICS = [
     "max_supervisor_backlog",
     "supervisor_count_today",
     "effective_supervisor_capacity_today",
+    "field_interaction_capacity_hours_per_day",
+    "field_interaction_demand_hours_per_day",
+    "field_interaction_used_hours_per_day",
+    "field_interaction_hours_per_supervisor_day",
+    "field_interaction_hours_per_active_crew_day",
+    "unresolved_field_support_hours_per_day",
+    "unresolved_field_support_hours_per_active_crew_day",
+    "field_support_utilization",
+    "mean_field_support_utilization",
+    "planning_hours_per_day",
+    "planning_hours_per_supervisor_day",
+    "admin_reporting_hours_per_day",
+    "admin_reporting_hours_per_supervisor_day",
     "avg_sa",
     "trust_in_data",
     "trust_in_management",
@@ -123,6 +140,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "planning_need_per_day": [0.5, 4.0],
         "peak_underresource_factor": [0.45, 1.05],
         "workload_pressure_sensitivity": [0.0, 1.5],
+        "field_interaction_demand_multiplier": [0.50, 3.00],
+        "field_interaction_capacity_multiplier": [0.50, 2.00],
     },
     "sanity_cases": [
         {
@@ -364,19 +383,37 @@ def scenario_fields(sc: Any) -> set:
     return set(vars(sc).keys())
 
 
+VIRTUAL_SCENARIO_FIELDS = {"field_interaction_demand_multiplier", "field_interaction_capacity_multiplier"}
+
+
 def override_scenario(sc: Any, overrides: Dict[str, Any]) -> Any:
     """Create a modified scenario object, ignoring unknown fields."""
     overrides = overrides or {}
     valid = scenario_fields(sc)
+    virtual = {k: v for k, v in overrides.items() if k in VIRTUAL_SCENARIO_FIELDS}
     clean = {k: v for k, v in overrides.items() if k in valid}
-    unknown = sorted(set(overrides) - valid)
+    unknown = sorted(set(overrides) - valid - set(virtual))
     if unknown:
         print(f"  Note: ignored unknown Scenario fields for {get_scenario_name(sc)}: {unknown}")
     if dataclasses.is_dataclass(sc):
-        return dataclasses.replace(sc, **clean)
-    new_sc = copy.deepcopy(sc)
-    for k, v in clean.items():
-        setattr(new_sc, k, v)
+        new_sc = dataclasses.replace(sc, **clean)
+    else:
+        new_sc = copy.deepcopy(sc)
+        for k, v in clean.items():
+            setattr(new_sc, k, v)
+
+    # v8: allow sensitivity-only virtual parameters without changing scenarios.py.
+    # This is used for field_interaction_demand_multiplier and field_interaction_capacity_multiplier. They are read by model.py
+    # if the v25.7 field-demand patch has been applied. If not, the value is still
+    # recorded in the final output but has no model effect.
+    for k, v in virtual.items():
+        try:
+            setattr(new_sc, k, v)
+        except Exception:
+            try:
+                object.__setattr__(new_sc, k, v)
+            except Exception:
+                print(f"  Warning: could not attach virtual Scenario field {k}={v} to {get_scenario_name(sc)}")
     return new_sc
 
 
@@ -611,6 +648,14 @@ def scale_grid_value(parameter: str, raw: float, ranges: Dict[str, Any]) -> floa
     return float(lo) + float(raw) * (float(hi) - float(lo))
 
 
+def threshold_values_for(test: Dict[str, Any], axis: str, parameter: str, default_grid_01: Sequence[float], ranges: Dict[str, Any]) -> List[float]:
+    """Return explicit threshold values for x/y or map normalized 0..1 grid values to parameter ranges."""
+    key = f"{axis}_values"
+    if key in test and test[key] is not None:
+        return [float(v) for v in test[key]]
+    return [scale_grid_value(parameter, float(raw), ranges) for raw in default_grid_01]
+
+
 def run_thresholds(cfg: Dict[str, Any], scenarios: Sequence[Any], analysis_mod: Any) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     general = cfg["general"]
     threshold = cfg.get("threshold_tests", {})
@@ -623,13 +668,13 @@ def run_thresholds(cfg: Dict[str, Any], scenarios: Sequence[Any], analysis_mod: 
         test_name = test.get("name") or f"{test['x']}_x_{test['y']}"
         x_param, y_param = test["x"], test["y"]
         print(f"\n[THRESHOLD] {test_name}: {x_param} x {y_param}")
+        x_values = threshold_values_for(test, "x", x_param, grid_values, ranges)
+        y_values = threshold_values_for(test, "y", y_param, grid_values, ranges)
         for sc in scenarios:
-            for x_raw in grid_values:
-                for y_raw in grid_values:
-                    x_val = scale_grid_value(x_param, x_raw, ranges)
-                    y_val = scale_grid_value(y_param, y_raw, ranges)
+            for x_val in x_values:
+                for y_val in y_values:
                     sc_mod = override_scenario(sc, {x_param: x_val, y_param: y_val})
-                    case_name = f"{test_name}_{x_raw:.2f}_{y_raw:.2f}"
+                    case_name = f"{test_name}_{x_val:.3g}_{y_val:.3g}"
                     f, ts = run_case_replicates(
                         analysis_mod=analysis_mod,
                         scenario=sc_mod,
@@ -641,7 +686,7 @@ def run_thresholds(cfg: Dict[str, Any], scenarios: Sequence[Any], analysis_mod: 
                         daily_shock_probability=general["daily_shock_probability"],
                         parameter=f"{x_param}|{y_param}",
                         parameter_value=f"{x_val:.6g}|{y_val:.6g}",
-                        level=f"{x_raw:.2f}|{y_raw:.2f}",
+                        level=f"{x_val:.6g}|{y_val:.6g}",
                         save_timeseries=general.get("save_timeseries", False),
                     )
                     for frame in f:
@@ -798,6 +843,26 @@ def screening_correlations(df: pd.DataFrame, cfg: Dict[str, Any], key_metrics: S
     return pd.DataFrame(rows).sort_values(["metric", "abs_corr"], ascending=[True, False]) if rows else pd.DataFrame()
 
 
+def threshold_summary(df: pd.DataFrame, key_metrics: Sequence[str]) -> pd.DataFrame:
+    """Aggregate threshold-grid runs by test/scenario/x/y for heatmap-ready analysis."""
+    if df.empty or "threshold" not in set(df.get("test_mode", [])):
+        return pd.DataFrame()
+    tdf = df[df["test_mode"] == "threshold"].copy()
+    if "x_value" not in tdf.columns or "y_value" not in tdf.columns:
+        return pd.DataFrame()
+    metrics = [m for m in key_metrics if m in tdf.columns]
+    if not metrics:
+        return pd.DataFrame()
+    group_cols = ["test_case", "scenario", "x_parameter", "y_parameter", "x_value", "y_value"]
+    for c in ["x_value", "y_value"] + metrics:
+        if c in tdf.columns:
+            tdf[c] = pd.to_numeric(tdf[c], errors="coerce")
+    grouped = tdf.groupby(group_cols, dropna=False)[metrics]
+    out = grouped.agg(["mean", "std", "min", "max"]).reset_index()
+    out.columns = ["_".join([str(x) for x in col if str(x) != ""]).strip("_") if isinstance(col, tuple) else str(col) for col in out.columns]
+    return out
+
+
 def add_sanity_flags(summary: pd.DataFrame) -> pd.DataFrame:
     if summary.empty:
         return pd.DataFrame()
@@ -835,6 +900,7 @@ def export_excel(
     summary_df: pd.DataFrame,
     ofat_df: pd.DataFrame,
     screening_df: pd.DataFrame,
+    threshold_df: pd.DataFrame,
     flags_df: pd.DataFrame,
     timeseries_df: Optional[pd.DataFrame],
     batch_started_at: Optional[datetime] = None,
@@ -860,6 +926,7 @@ def export_excel(
         flags_df.to_excel(writer, sheet_name="Sanity flags", index=False)
         ofat_df.to_excel(writer, sheet_name="OFAT effects", index=False)
         screening_df.to_excel(writer, sheet_name="Screening corr", index=False)
+        threshold_df.to_excel(writer, sheet_name="Threshold summary", index=False)
         final_df.to_excel(writer, sheet_name="Final run metrics", index=False)
         timing_cols=[c for c in ["test_mode","test_case","scenario","run","sample_id","seed","run_started_at","run_finished_at","run_duration_sec"] if c in final_df.columns]
         if timing_cols:
@@ -891,7 +958,7 @@ def export_excel(
                 ws.column_dimensions[col_letter].width = max(10, min(45, max_len + 2))
 
 
-def plot_outputs(out_dir: Path, summary_df: pd.DataFrame, ofat_df: pd.DataFrame, screening_df: pd.DataFrame, key_metrics: Sequence[str]):
+def plot_outputs(out_dir: Path, summary_df: pd.DataFrame, ofat_df: pd.DataFrame, screening_df: pd.DataFrame, threshold_df: pd.DataFrame, key_metrics: Sequence[str]):
     if plt is None:
         print("matplotlib not available; skipping plots.")
         return
@@ -900,7 +967,7 @@ def plot_outputs(out_dir: Path, summary_df: pd.DataFrame, ofat_df: pd.DataFrame,
 
     # OFAT tornado-like bar charts for selected metrics.
     if not ofat_df.empty:
-        for metric in [m for m in ["project_delay_days", "avg_weekly_ppc", "firefighting_ratio", "cumulative_making_do_starts"] if m in key_metrics]:
+        for metric in [m for m in ["project_delay_days", "avg_weekly_ppc", "firefighting_ratio", "cumulative_making_do_starts", "unresolved_field_support_hours_per_day", "field_support_utilization"] if m in key_metrics]:
             sub = ofat_df[ofat_df["metric"] == metric].copy().sort_values("relative_range_effect", ascending=False).head(20)
             if sub.empty:
                 continue
@@ -915,7 +982,7 @@ def plot_outputs(out_dir: Path, summary_df: pd.DataFrame, ofat_df: pd.DataFrame,
 
     # Screening rank correlation charts.
     if not screening_df.empty:
-        for metric in [m for m in ["project_delay_days", "avg_weekly_ppc", "firefighting_ratio", "cumulative_making_do_starts"] if m in key_metrics]:
+        for metric in [m for m in ["project_delay_days", "avg_weekly_ppc", "firefighting_ratio", "cumulative_making_do_starts", "unresolved_field_support_hours_per_day", "field_support_utilization"] if m in key_metrics]:
             sub = screening_df[screening_df["metric"] == metric].copy().sort_values("abs_corr", ascending=False).head(20)
             if sub.empty:
                 continue
@@ -929,14 +996,49 @@ def plot_outputs(out_dir: Path, summary_df: pd.DataFrame, ofat_df: pd.DataFrame,
             fig.savefig(plot_dir / f"screening_corr_{metric}.png", dpi=180)
             plt.close(fig)
 
+    # Targeted threshold heatmaps for selected metrics.
+    if threshold_df is not None and not threshold_df.empty:
+        heatmap_metrics = [m for m in [
+            "avg_weekly_ppc",
+            "project_delay_days",
+            "field_support_utilization",
+            "unresolved_field_support_hours_per_day",
+            "admin_reporting_hours_per_supervisor_day",
+            "cumulative_making_do_starts",
+        ] if f"{m}_mean" in threshold_df.columns]
+        for metric in heatmap_metrics:
+            col = f"{metric}_mean"
+            for (case, scenario), sub in threshold_df.groupby(["test_case", "scenario"]):
+                pivot = sub.pivot_table(index="y_value", columns="x_value", values=col, aggfunc="mean")
+                if pivot.empty:
+                    continue
+                fig, ax = plt.subplots(figsize=(7, 5))
+                im = ax.imshow(pivot.values, aspect="auto", origin="lower")
+                ax.set_xticks(range(len(pivot.columns)))
+                ax.set_xticklabels([f"{v:.2g}" for v in pivot.columns], rotation=45, ha="right")
+                ax.set_yticks(range(len(pivot.index)))
+                ax.set_yticklabels([f"{v:.2g}" for v in pivot.index])
+                xlab = str(sub["x_parameter"].iloc[0]) if "x_parameter" in sub else "x"
+                ylab = str(sub["y_parameter"].iloc[0]) if "y_parameter" in sub else "y"
+                ax.set_xlabel(xlab)
+                ax.set_ylabel(ylab)
+                ax.set_title(f"{metric}: {case} | {scenario}")
+                fig.colorbar(im, ax=ax)
+                fig.tight_layout()
+                safe = safe_sheet_name(f"{case}_{scenario}_{metric}").replace(" ", "_")
+                fig.savefig(plot_dir / f"threshold_{safe}.png", dpi=180)
+                plt.close(fig)
 
-def write_csv_outputs(out_dir: Path, final_df: pd.DataFrame, summary_df: pd.DataFrame, ofat_df: pd.DataFrame, screening_df: pd.DataFrame, timeseries_df: Optional[pd.DataFrame]):
+
+def write_csv_outputs(out_dir: Path, final_df: pd.DataFrame, summary_df: pd.DataFrame, ofat_df: pd.DataFrame, screening_df: pd.DataFrame, threshold_df: pd.DataFrame, timeseries_df: Optional[pd.DataFrame]):
     final_df.to_csv(out_dir / "final_run_metrics.csv", index=False, encoding="utf-8-sig")
     summary_df.to_csv(out_dir / "summary.csv", index=False, encoding="utf-8-sig")
     if not ofat_df.empty:
         ofat_df.to_csv(out_dir / "ofat_effects.csv", index=False, encoding="utf-8-sig")
     if not screening_df.empty:
         screening_df.to_csv(out_dir / "screening_correlations.csv", index=False, encoding="utf-8-sig")
+    if not threshold_df.empty:
+        threshold_df.to_csv(out_dir / "threshold_summary.csv", index=False, encoding="utf-8-sig")
     if timeseries_df is not None:
         timeseries_df.to_csv(out_dir / "timeseries.csv", index=False, encoding="utf-8-sig")
 
@@ -963,6 +1065,7 @@ KEY_SCREENING_PARAMETERS = [
     "overcommitment_tendency",
     "making_do_tendency",
     "supervisor_capacity",
+    "field_interaction_capacity_multiplier",
     "peak_underresource_factor",
     "workload_pressure_sensitivity",
 ]
@@ -981,8 +1084,32 @@ CORE_SCREENING_PARAMETERS = [
 ]
 
 THRESHOLD_CORE_TESTS = [
-    {"name": "crew_access_x_management_access", "x": "crew_access", "y": "management_access"},
     {"name": "reporting_burden_x_autonomy", "x": "reporting_burden", "y": "autonomy_level"},
+    {"name": "overcommitment_x_commitment_realism", "x": "overcommitment_tendency", "y": "commitment_realism"},
+]
+
+TARGETED_THRESHOLD_TESTS = [
+    {
+        "name": "reporting_burden_x_autonomy",
+        "x": "reporting_burden",
+        "y": "autonomy_level",
+        "x_values": [0.05, 0.25, 0.45, 0.65, 0.85, 0.95],
+        "y_values": [0.05, 0.25, 0.45, 0.65, 0.85, 0.95],
+    },
+    {
+        "name": "overcommitment_x_commitment_realism",
+        "x": "overcommitment_tendency",
+        "y": "commitment_realism",
+        "x_values": [0.00, 0.20, 0.40, 0.60, 0.80, 0.95],
+        "y_values": [0.10, 0.30, 0.50, 0.70, 0.90, 0.95],
+    },
+    {
+        "name": "field_capacity_x_field_demand",
+        "x": "field_interaction_capacity_multiplier",
+        "y": "field_interaction_demand_multiplier",
+        "x_values": [0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00],
+        "y_values": [0.50, 1.00, 1.50, 2.00, 2.50, 3.00],
+    },
 ]
 
 
@@ -1018,12 +1145,34 @@ def apply_preset(cfg: Dict[str, Any], preset: str) -> Dict[str, Any]:
         out["screening"]["parameters"] = KEY_SCREENING_PARAMETERS
 
     elif preset == "screening":
+        # v25.6: local tests showed runs are fast enough to make the default
+        # screening preset more useful than a smoke-level sample.
         out["general"]["runs_per_case"] = 1
         out.setdefault("ofat", {})["enabled"] = False
         out.setdefault("threshold_tests", {})["enabled"] = False
         out.setdefault("screening", {})["enabled"] = True
-        out["screening"]["n_samples"] = 40
-        out["screening"]["runs_per_sample"] = 1
+        out["screening"]["n_samples"] = 80
+        out["screening"]["runs_per_sample"] = 2
+        out["screening"]["parameters"] = KEY_SCREENING_PARAMETERS
+
+    elif preset == "threshold_focus":
+        # v8: targeted 2D tests for the three mechanisms identified after screening.
+        # Intended as interactive option 4.
+        out["general"]["runs_per_case"] = 1
+        out.setdefault("ofat", {})["enabled"] = False
+        out.setdefault("screening", {})["enabled"] = False
+        out.setdefault("threshold_tests", {})["enabled"] = True
+        out["threshold_tests"]["runs_per_case"] = 3
+        out["threshold_tests"]["grid_values_01"] = [0.10, 0.30, 0.50, 0.70, 0.90]
+        out["threshold_tests"]["tests"] = TARGETED_THRESHOLD_TESTS
+
+    elif preset == "screening_large":
+        out["general"]["runs_per_case"] = 1
+        out.setdefault("ofat", {})["enabled"] = False
+        out.setdefault("threshold_tests", {})["enabled"] = False
+        out.setdefault("screening", {})["enabled"] = True
+        out["screening"]["n_samples"] = 150
+        out["screening"]["runs_per_sample"] = 3
         out["screening"]["parameters"] = KEY_SCREENING_PARAMETERS
 
     elif preset == "threshold":
@@ -1046,7 +1195,7 @@ def apply_preset(cfg: Dict[str, Any], preset: str) -> Dict[str, Any]:
         out["threshold_tests"]["grid_values_01"] = [0.10, 0.30, 0.50, 0.70, 0.90]
         out["threshold_tests"]["tests"] = THRESHOLD_CORE_TESTS
         out.setdefault("screening", {})["enabled"] = True
-        out["screening"]["n_samples"] = 80
+        out["screening"]["n_samples"] = 150
         out["screening"]["runs_per_sample"] = 2
         out["screening"]["parameters"] = KEY_SCREENING_PARAMETERS
 
@@ -1072,7 +1221,7 @@ def apply_preset(cfg: Dict[str, Any], preset: str) -> Dict[str, Any]:
         out["screening"]["parameters"] = KEY_SCREENING_PARAMETERS
 
     else:
-        raise SystemExit(f"Unknown preset: {preset}. Use config, smoke, light, screening, threshold, standard, or full.")
+        raise SystemExit(f"Unknown preset: {preset}. Use config, smoke, light, screening, threshold_focus, screening_large, threshold, standard, or full.")
     return out
 
 
@@ -1138,6 +1287,53 @@ def confirm_before_run(total_runs: int, yes: bool) -> None:
     if answer not in {"y", "yes", "k", "kylla", "kyllä"}:
         raise SystemExit("Run cancelled by user.")
 
+
+def preset_label(preset: str) -> str:
+    labels = {
+        "smoke": "Smoke: very quick technical check",
+        "light": "Light: small first sensitivity run",
+        "screening": "Screening: broader LHS-style screening",
+        "threshold_focus": "Targeted thresholds: DVM support/control, PPC commitments, and field-support capacity-demand bottleneck",
+        "screening_large": "Large screening: stronger LHS screening, no threshold grids",
+        "threshold": "Threshold: selected 2D parameter-pair heatmaps",
+        "standard": "Standard: sanity + OFAT + threshold + screening",
+        "full": "Full: heavy run for final robustness checks",
+        "config": "Config: use sensitivity_config.yaml exactly as written",
+    }
+    return labels.get(preset, preset)
+
+
+def choose_preset_interactively(cfg: Dict[str, Any], scenarios: Sequence[Any], mode: str) -> str:
+    """Ask the user which run-size preset to use and show estimated run counts."""
+    presets = ["smoke", "light", "screening", "threshold_focus", "screening_large", "threshold", "standard", "full", "config"]
+    modes = ["sanity", "ofat", "threshold", "screening"] if mode == "all" else [mode]
+
+    print("\nChoose sensitivity run size / preset:")
+    print("  Recommendation: after screening, use option 4 'threshold_focus' for targeted tests.\n")
+    for idx, preset in enumerate(presets, start=1):
+        test_cfg = apply_preset(cfg, preset)
+        est = estimate_run_count(test_cfg, scenarios, modes)
+        total = est.get("total", 0)
+        approx_min = total * 0.5 / 60.0  # based on recent observed local run time ~0.5 s/run
+        if approx_min < 60:
+            time_txt = f"~{approx_min:.1f} min at 0.5 s/run"
+        else:
+            time_txt = f"~{approx_min/60.0:.1f} h at 0.5 s/run"
+        print(f"  {idx}. {preset:15s} {total:>7,} model runs   {time_txt:>20s}   - {preset_label(preset)}")
+
+    print("\nYou can type a number or preset name. Press Enter for 'screening'.")
+    while True:
+        answer = input("Preset: ").strip().lower()
+        if not answer:
+            return "screening"
+        if answer.isdigit():
+            i = int(answer)
+            if 1 <= i <= len(presets):
+                return presets[i-1]
+        if answer in presets:
+            return answer
+        print("Unknown selection. Please type a number or one of: " + ", ".join(presets))
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1148,7 +1344,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-dir", type=str, default=None, help="Folder containing app.py, dvm_abm/ and config/.")
     parser.add_argument("--config", type=str, default="sensitivity_config.yaml", help="Sensitivity YAML config path.")
     parser.add_argument("--mode", type=str, default="all", choices=["all", "sanity", "ofat", "threshold", "screening"], help="Which test mode to run.")
-    parser.add_argument("--preset", type=str, default="smoke", choices=["config", "smoke", "light", "screening", "threshold", "standard", "full"], help="Run-size preset. Default smoke is intentionally small. Use --preset config to use YAML unchanged.")
+    parser.add_argument("--preset", type=str, default=None, choices=["config", "smoke", "light", "screening", "threshold_focus", "screening_large", "threshold", "standard", "full"], help="Run-size preset. If omitted, the script asks interactively. Use --preset config to use YAML unchanged.")
     parser.add_argument("--yes", action="store_true", help="Skip the run-count confirmation prompt.")
     parser.add_argument("--estimate-only", action="store_true", help="Print estimated run count and exit without running simulations.")
     parser.add_argument("--out-dir", type=str, default=None, help="Output folder. Default: <model-dir>/sensitivity_results/<timestamp>.")
@@ -1167,11 +1363,13 @@ def main():
         return
 
     cfg = load_config(config_path)
-    cfg = apply_preset(cfg, args.preset)
 
     model_dir = Path(args.model_dir).expanduser().resolve() if args.model_dir else prompt_for_model_dir(Path.cwd())
     scenarios, analysis_mod = load_model_api(model_dir)
     selected_scenarios = choose_scenarios(scenarios, cfg.get("general", {}).get("scenario_filter", "all"))
+
+    selected_preset = args.preset or choose_preset_interactively(cfg, selected_scenarios, args.mode)
+    cfg = apply_preset(cfg, selected_preset)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path(args.out_dir).expanduser().resolve() if args.out_dir else model_dir / "sensitivity_results" / timestamp
@@ -1186,7 +1384,7 @@ def main():
     modes = ["sanity", "ofat", "threshold", "screening"] if args.mode == "all" else [args.mode]
     print(f"\nModel folder: {model_dir}")
     print(f"Output folder: {out_dir}")
-    print(f"Preset: {args.preset}")
+    print(f"Preset: {selected_preset}")
     print(f"Scenarios: {[get_scenario_name(s) for s in selected_scenarios]}")
     print(f"Modes: {modes}")
 
@@ -1233,18 +1431,19 @@ def main():
     summary_df = numeric_summary(final_df, key_metrics)
     ofat_df = ofat_effects(final_df, key_metrics)
     screening_df = screening_correlations(final_df, cfg, key_metrics)
+    threshold_df = threshold_summary(final_df, key_metrics)
     flags_df = add_sanity_flags(summary_df)
 
     batch_duration_sec = time.perf_counter() - batch_perf_start
     batch_finished_at = datetime.now()
 
     excel_path = out_dir / f"dvm_abm_sensitivity_results_{timestamp}.xlsx"
-    export_excel(excel_path, cfg, final_df, summary_df, ofat_df, screening_df, flags_df, timeseries_df, batch_started_at, batch_finished_at, batch_duration_sec)
+    export_excel(excel_path, cfg, final_df, summary_df, ofat_df, screening_df, threshold_df, flags_df, timeseries_df, batch_started_at, batch_finished_at, batch_duration_sec)
 
     if cfg.get("outputs", {}).get("export_raw_csv", True):
-        write_csv_outputs(out_dir, final_df, summary_df, ofat_df, screening_df, timeseries_df)
+        write_csv_outputs(out_dir, final_df, summary_df, ofat_df, screening_df, threshold_df, timeseries_df)
     if cfg.get("outputs", {}).get("make_plots", True):
-        plot_outputs(out_dir, summary_df, ofat_df, screening_df, key_metrics)
+        plot_outputs(out_dir, summary_df, ofat_df, screening_df, threshold_df, key_metrics)
 
     print("\nSensitivity test completed.")
     print(f"Excel report: {excel_path}")

@@ -1,29 +1,53 @@
-# DVM-ABM sensitivity harness v3
+# DVM-ABM sensitivity harness v8 — targeted thresholds
 
-This version is optimised for local model testing and avoids accidental long runs.
+This version adds an interactive targeted threshold preset for the three mechanism tests selected after the v25.6 screening run:
 
-Key changes compared with v2:
+1. `reporting_burden × autonomy_level`
+   - tests when DVM becomes administrative/control burden instead of workface support.
+2. `overcommitment_tendency × commitment_realism`
+   - tests when Last Planner commitments collapse PPC.
+3. `field_interaction_capacity_multiplier × field_interaction_demand_multiplier`
+   - tests when supervisor field support becomes a bottleneck.
 
-- prints an estimated number of individual model runs before execution;
-- asks for confirmation before running unless `--yes` is used;
-- records run start time, finish time and duration for each individual model run;
-- records batch start time, finish time and total duration in the Excel README sheet;
-- includes a separate `Run timing` sheet in the Excel output;
-- adds an `extreme_making_do` sanity check;
-- handles constant columns in screening correlations without NumPy warnings;
-- includes new idle-time and dynamic aggregate metrics when the model provides them.
+## Important
 
-Recommended first checks:
+The third test requires the v25.7 `model.py` patch because `field_interaction_demand_multiplier` is a new virtual sensitivity parameter. The default value is `1.0`, so normal v25.6 behaviour is unchanged unless the sensitivity harness overrides it.
 
-```powershell
-py run_sensitivity.py --model-dir "C:\path\to\DVM_MESA-simulation_2026-main" --preset smoke --estimate-only
-py run_sensitivity.py --model-dir "C:\path\to\DVM_MESA-simulation_2026-main" --preset smoke
-```
+## Recommended run
 
-A useful next screening run:
+From this folder:
 
 ```powershell
-py run_sensitivity.py --model-dir "C:\path\to\DVM_MESA-simulation_2026-main" --preset screening
+py run_sensitivity.py --model-dir "C:\path\to\DVM_MESA-simulation_2026-main"
 ```
 
-Use `--yes` only when you already accept the estimated run count.
+In the interactive menu, choose:
+
+```text
+4
+```
+
+This runs `threshold_focus`.
+
+You can also run it directly:
+
+```powershell
+py run_sensitivity.py --model-dir "C:\path\to\DVM_MESA-simulation_2026-main" --preset threshold_focus
+```
+
+## Outputs
+
+In addition to the previous files, v8 writes:
+
+- `threshold_summary.csv`
+- Excel sheet `Threshold summary`
+- threshold heatmap PNGs in `plots/`
+
+Key metrics to inspect:
+
+- `avg_weekly_ppc`
+- `project_delay_days`
+- `field_support_utilization`
+- `unresolved_field_support_hours_per_day`
+- `admin_reporting_hours_per_supervisor_day`
+- `cumulative_making_do_starts`

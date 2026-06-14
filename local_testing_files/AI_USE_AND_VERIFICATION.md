@@ -34,7 +34,7 @@ Where relevant, the exact AI tool and model version should be recorded in the pr
 | Model | GPT-5.5 Thinking |
 | Main use | Code support, debugging, documentation, sensitivity testing design, writing support |
 | Period of use | To be completed by the author |
-| Responsible human researcher | To be completed by the author |
+| Responsible human researcher | Dr Eelon Lappalainen |
 
 If other tools are later used, they should be added to this section.
 

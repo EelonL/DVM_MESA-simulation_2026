@@ -283,16 +283,25 @@ class SupervisorAgent(MesaCompatAgent):
             variability = r.normalvariate(0.0, self.admin_variability)
 
         dvm_reporting_time = s.reporting_burden * self.reporting_time_base * supervisor_count
-        # Existing scenario load parameters are treated as extra site-level burden;
-        # nominal_admin already contains the role-based "other/admin" share.
-        base_workload = max(
+        # v25.5: avoid double-counting administration.
+        # In v25.4, the role-based nominal_admin already represented the non-field,
+        # non-planning part of the day, but the old single-supervisor scenario loads
+        # were added on top at full scale. That made admin/reporting consume most of
+        # the day and forced planning_time to zero, causing unrealistically low PPC
+        # and very long delays. Here the role-based admin allocation is the baseline;
+        # legacy scenario load parameters act only as small site-level adjustments.
+        legacy_site_admin_adjustment = 0.20 * max(
             0.0,
-            nominal_admin
-            + self.base_admin_load
+            self.base_admin_load
             + self.management_reporting_load
             + self.procurement_admin_load
             + self.authority_reporting_load
-            + self.meeting_load
+            + self.meeting_load,
+        )
+        base_workload = max(
+            0.0,
+            nominal_admin * (1.0 + 0.20 * s.reporting_burden)
+            + legacy_site_admin_adjustment
             + dvm_reporting_time
             + variability,
         )

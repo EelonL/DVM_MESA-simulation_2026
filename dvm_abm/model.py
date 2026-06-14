@@ -748,14 +748,14 @@ class DVMConstructionModel(Model):
             trade_hours*self.trade_supervisor_planning_share
             + site_hours*self.site_manager_planning_share,
         )
-        # Role-based other/admin/reporting budget. Scenario-level reporting burden
-        # is added on top in SupervisorAgent.process_day.
-        self.admin_reporting_nominal_hours_today=max(
-            0.0,
-            self.effective_supervisor_capacity_today
-            - self.field_interaction_capacity_hours_today
-            - self.planning_target_hours_today,
-        )
+        # v25.5: role-based admin/reporting baseline.
+        # Do not allocate the entire remaining day to administration. The empirical
+        # time-allocation shares are treated as typical baseline activities, while
+        # unallocated time remains flexible capacity for disturbances and planning.
+        trade_admin_hours=trade_hours*0.17
+        site_admin_hours=site_hours*0.28
+        site_meeting_hours=site_hours*0.10
+        self.admin_reporting_nominal_hours_today=max(0.0, trade_admin_hours + site_admin_hours + site_meeting_hours)
         # Routine field interaction demand: the more active crews and the more
         # uncertain the workface, the more same-day crew interaction is needed.
         uncertainty=(
@@ -770,7 +770,10 @@ class DVMConstructionModel(Model):
             + .15*self.dvm_scenario.autonomy_level
             - .10*self.dvm_scenario.decision_centralization
         )
-        demand_per_active_crew=clamp_range(1.15 + 1.10*uncertainty - .55*dvm_self_service, .45, 2.60)
+        # v25.5: the previous demand formula made routine field-support demand
+        # too large. Field interaction is now calibrated as hours per active crew
+        # per day. DVM self-service reduces routine questions and local support need.
+        demand_per_active_crew=clamp_range(0.65 + 0.75*uncertainty - .35*dvm_self_service, .25, 1.60)
         self.baseline_field_interaction_demand_hours_today=len(getattr(self,"active_crews",[]))*demand_per_active_crew
         self.field_interaction_demand_hours_today=self.baseline_field_interaction_demand_hours_today
         self.unresolved_field_support_hours_today=0.0
